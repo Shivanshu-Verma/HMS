@@ -7,6 +7,8 @@ JWT authentication, CORS, and custom exception handling.
 import os
 from decouple import config, Csv
 
+PORT = os.getenv("PORT", "8000")
+
 # Build paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
