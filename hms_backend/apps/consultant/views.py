@@ -1,294 +1,362 @@
-"""
-Consultant (counsellor) views for session management.
-
-Handles queue listing, session start/context/notes/assign-doctor, and history.
-"""
+"""Counsellor endpoints for follow-up operations and reporting."""
 import datetime
-import logging
 
-from rest_framework.views import APIView
 from bson import ObjectId
 from django.conf import settings
+from rest_framework import serializers
+from rest_framework.views import APIView
 
 from apps.auth_app.permissions import IsConsultant
-from apps.sessions.models import ActiveSession, ActiveCounsellorStage
-from apps.patients.models import Visit, Patient
-from apps.receptionist.serializers import serialize_active_session_for_queue
-from apps.patients.serializers import serialize_patient, serialize_visit_summary
-from utils.response import success_response, paginated_response
-from utils.pagination import parse_pagination_params, paginate_queryset
-from utils.exceptions import NotFoundError, ConflictError, HMSError
-
-logger = logging.getLogger(__name__)
+from apps.patients.models import Patient, StatusUpdate, Visit
+from apps.consultant.serializers import SessionNotesSerializer
+from apps.sessions.models import ActiveSession
+from utils.exceptions import NotFoundError
+from utils.response import success_response
 
 
-class ConsultantQueueView(APIView):
-    """
-    Get the counsellor queue — patients at the 'counsellor' stage.
+class StatusUpdateSerializer(serializers.Serializer):
+    """Payload validator for counsellor-driven patient status updates."""
 
-    GET /api/v1/consultant/queue
-    """
+    status = serializers.ChoiceField(choices=['active', 'inactive', 'dead'], required=True)
+
+
+class CounsellorFollowupView(APIView):
+    """Return active patients overdue for follow-up based on last completed visit."""
 
     permission_classes = [IsConsultant]
 
     def get(self, request):
-        """
-        Return all active sessions at the counsellor stage, sorted by check-in time.
+        page = max(1, int(request.query_params.get('page', 1)))
+        page_size = max(1, int(request.query_params.get('pageSize', 20)))
+        skip = (page - 1) * page_size
 
-        Args:
-            request: DRF request.
+        threshold_date = datetime.datetime.utcnow() - datetime.timedelta(days=settings.FOLLOWUP_THRESHOLD_DAYS)
 
-        Returns:
-            Response: List of active sessions awaiting counselling.
-        """
-        hospital_id = ObjectId(request.user.hospital_id)
+        pipeline = [
+            {
+                '$match': {
+                    'visit_type': {'$in': ['standard', 'debt_payment']},
+                }
+            },
+            {
+                '$group': {
+                    '_id': '$patient_id',
+                    'last_visit_date': {'$max': '$visit_date'},
+                }
+            },
+            {
+                '$match': {
+                    'last_visit_date': {'$lt': threshold_date},
+                }
+            },
+            {
+                '$lookup': {
+                    'from': 'patients',
+                    'localField': '_id',
+                    'foreignField': '_id',
+                    'as': 'patient',
+                }
+            },
+            {'$unwind': '$patient'},
+            {
+                '$match': {
+                    'patient.status': 'active',
+                }
+            },
+            {
+                '$addFields': {
+                    'days_since_last_visit': {
+                        '$dateDiff': {
+                            'startDate': '$last_visit_date',
+                            'endDate': datetime.datetime.utcnow(),
+                            'unit': 'day',
+                        }
+                    }
+                }
+            },
+            {
+                '$project': {
+                    '_id': 0,
+                    'patient_id': {'$toString': '$patient._id'},
+                    'full_name': '$patient.full_name',
+                    'phone_number': '$patient.phone',
+                    'last_visit_date': 1,
+                    'days_since_last_visit': 1,
+                    'status': '$patient.status',
+                }
+            },
+            {'$sort': {'last_visit_date': 1}},
+            {
+                '$facet': {
+                    'items': [{'$skip': skip}, {'$limit': page_size}],
+                    'total': [{'$count': 'count'}],
+                }
+            },
+        ]
 
-        sessions = ActiveSession.objects(
-            hospital_id=hospital_id,
-            state__current_stage='counsellor',
-            state__status='in_progress',
-        ).order_by('timestamps__checkin_at')
+        result = list(Visit._get_collection().aggregate(pipeline))
+        bucket = result[0] if result else {'items': [], 'total': []}
+        total = bucket['total'][0]['count'] if bucket['total'] else 0
 
-        serialized = [serialize_active_session_for_queue(s) for s in sessions]
-        return success_response({'items': serialized, 'total': len(serialized)})
+        items = []
+        for row in bucket['items']:
+            items.append(
+                {
+                    'patient_id': row['patient_id'],
+                    'full_name': row['full_name'],
+                    'phone_number': row['phone_number'],
+                    'last_visit_date': row['last_visit_date'].isoformat() if row.get('last_visit_date') else None,
+                    'days_since_last_visit': row.get('days_since_last_visit', 0),
+                    'status': row['status'],
+                }
+            )
+
+        return success_response(
+            {
+                'items': items,
+                'pagination': {
+                    'page': page,
+                    'pageSize': page_size,
+                    'total': total,
+                },
+            }
+        )
 
 
-class StartSessionView(APIView):
-    """
-    Mark a counsellor session as started.
-
-    POST /api/v1/consultant/sessions/{id}/start
-    """
+class CounsellorQueueView(APIView):
+    """Return active sessions waiting for counsellor action."""
 
     permission_classes = [IsConsultant]
 
-    def post(self, request, session_id):
-        """
-        Set the counsellor as assigned and mark the session as in-progress.
+    def get(self, request):
+        sessions = ActiveSession.objects(
+            status__in=['checked_in', 'counsellor']
+        ).order_by('checked_in_at')
 
-        Args:
-            request: DRF request.
-            session_id: ActiveSession ObjectId string.
+        items = []
+        for session in sessions:
+            patient = Patient.objects(id=session.patient_id).only('outstanding_debt').first()
+            items.append(
+                {
+                    'session_id': str(session.id),
+                    'patient_id': str(session.patient_id),
+                    'patient_name': session.patient_name,
+                    'checked_in_at': session.checked_in_at.isoformat(),
+                    'checked_in_by_name': session.checked_in_by_name,
+                    'outstanding_debt': float(patient.outstanding_debt if patient else session.outstanding_debt_at_checkin),
+                    'session_status': session.status,
+                }
+            )
 
-        Returns:
-            Response: Updated session data.
-
-        Raises:
-            NotFoundError: If session doesn't exist.
-            ConflictError: If session is not at the counsellor stage.
-        """
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
-
-        if session.state.current_stage != 'counsellor':
-            raise ConflictError(message="Session is not at the counsellor stage.", code="WRONG_STAGE")
-
-        now = datetime.datetime.utcnow()
-        counsellor_id = ObjectId(request.user.id)
-
-        # Update session
-        session.state.stage_status = 'in_progress'
-        session.assignments.counsellor_id = counsellor_id
-        session.timestamps.counsellor_started_at = now
-        session.timestamps.updated_at = now
-        session.updated_at = now
-
-        if counsellor_id not in session.participants:
-            session.participants.append(counsellor_id)
-
-        session.save()
-
-        return success_response(serialize_active_session_for_queue(session))
+        return success_response({'items': items, 'total': len(items)})
 
 
-class SessionContextView(APIView):
-    """
-    Get full context for a counsellor session (patient details + history).
-
-    GET /api/v1/consultant/sessions/{id}/context
-    """
+class CounsellorSessionDetailView(APIView):
+    """Return counsellor session context for a specific active session."""
 
     permission_classes = [IsConsultant]
 
     def get(self, request, session_id):
-        """
-        Return session data with patient details and past visit history.
-
-        Args:
-            request: DRF request.
-            session_id: ActiveSession ObjectId string.
-
-        Returns:
-            Response: Session context with patient details and previous visits.
-        """
         try:
             session = ActiveSession.objects.get(id=ObjectId(session_id))
         except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
+            raise NotFoundError(message='Session not found.', code='SESSION_NOT_FOUND')
 
-        # Get full patient details
-        patient = None
-        try:
-            patient_doc = Patient.objects.get(id=session.patient_id)
-            patient = serialize_patient(patient_doc)
-        except Patient.DoesNotExist:
-            pass
+        patient = Patient.objects(id=session.patient_id).first()
+        if not patient:
+            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
 
-        # Get previous visits from archive
-        hospital_id = ObjectId(request.user.hospital_id)
-        previous_visits = Visit.objects(
-            hospital_id=hospital_id,
-            patient_id=session.patient_id,
-        ).order_by('-visit_date').limit(5)
+        return success_response(
+            {
+                'session_id': str(session.id),
+                'patient': {
+                    'patient_id': str(patient.id),
+                    'registration_number': patient.registration_number,
+                    'full_name': patient.full_name,
+                    'phone_number': patient.phone,
+                    'date_of_birth': patient.date_of_birth.date().isoformat() if patient.date_of_birth else None,
+                    'sex': patient.gender,
+                    'addiction_type': patient.addiction_profile.addiction_type if patient.addiction_profile else None,
+                    'addiction_duration_text': patient.addiction_profile.addiction_duration_text if patient.addiction_profile else None,
+                    'allergies': patient.medical_background.allergies if patient.medical_background else None,
+                    'medical_history': patient.medical_background.medical_history if patient.medical_background else None,
+                },
+                'checked_in_at': session.checked_in_at.isoformat() if session.checked_in_at else None,
+                'session_status': session.status,
+            }
+        )
 
-        previous_visits_serialized = [serialize_visit_summary(v) for v in previous_visits]
 
-        session_data = serialize_active_session_for_queue(session)
-        session_data['patient_details'] = patient
-        session_data['previous_visits'] = previous_visits_serialized
-
-        return success_response(session_data)
-
-
-class SubmitNotesView(APIView):
-    """
-    Submit counsellor session notes.
-
-    POST /api/v1/consultant/sessions/{id}/notes
-    """
+class CounsellorSessionCompleteView(APIView):
+    """Persist counsellor session notes and forward active session to doctor stage."""
 
     permission_classes = [IsConsultant]
 
     def post(self, request, session_id):
-        """
-        Save counsellor notes, mood assessment, and risk level to the active session.
-
-        Args:
-            request: DRF request with session notes data.
-            session_id: ActiveSession ObjectId string.
-
-        Returns:
-            Response: Updated session data.
-        """
-        from apps.consultant.serializers import SessionNotesSerializer
+        serializer = SessionNotesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
         try:
             session = ActiveSession.objects.get(id=ObjectId(session_id))
         except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
-
-        if session.state.current_stage != 'counsellor':
-            raise ConflictError(message="Session is not at the counsellor stage.", code="WRONG_STAGE")
-
-        serializer = SessionNotesSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
+            raise NotFoundError(message='Session not found.', code='SESSION_NOT_FOUND')
 
         now = datetime.datetime.utcnow()
-        counsellor_id = ObjectId(request.user.id)
 
-        # Calculate session duration
-        started_at = session.timestamps.counsellor_started_at or now
-        duration = max(1, int((now - started_at).total_seconds() / 60))
+        if not session.counsellor_started_at:
+            session.counsellor_started_at = now
 
-        # Save counsellor stage data
-        session.counsellor_stage = ActiveCounsellorStage(
-            session_notes=data['session_notes'],
-            mood_assessment=data.get('mood_assessment', 5),
-            risk_level=data['risk_level'],
-            recommendations=data.get('recommendations'),
-            follow_up_required=data.get('follow_up_required', True),
-            session_duration_minutes=duration,
-            completed_by=counsellor_id,
-            completed_at=now,
-        )
-
-        session.state.stage_status = 'ready_for_next'
-        session.timestamps.counsellor_completed_at = now
-        session.timestamps.updated_at = now
+        session.assigned_counsellor_id = ObjectId(request.user.id)
+        session.counsellor_session_notes = serializer.validated_data['session_notes']
+        session.counsellor_mood_assessment = serializer.validated_data.get('mood_assessment', 5)
+        session.counsellor_risk_level = serializer.validated_data['risk_level']
+        session.counsellor_recommendations = serializer.validated_data.get('recommendations', '')
+        session.counsellor_follow_up_required = serializer.validated_data.get('follow_up_required', True)
+        session.counsellor_completed_at = now
+        session.status = 'doctor'
         session.updated_at = now
         session.save()
 
-        return success_response(serialize_active_session_for_queue(session))
+        return success_response(
+            {
+                'session_id': str(session.id),
+                'status': session.status,
+                'forwarded_to': 'doctor',
+                'counsellor_completed_at': now.isoformat(),
+            }
+        )
 
 
-class AssignDoctorView(APIView):
-    """
-    Move the session from counsellor to doctor stage.
-
-    PATCH /api/v1/consultant/sessions/{id}/assign-doctor
-    """
+class CounsellorPatientStatusView(APIView):
+    """Update patient status and append status update audit row."""
 
     permission_classes = [IsConsultant]
 
-    def patch(self, request, session_id):
-        """
-        Transition the session to the doctor stage.
+    def patch(self, request, patient_id):
+        serializer = StatusUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        Args:
-            request: DRF request.
-            session_id: ActiveSession ObjectId string.
-
-        Returns:
-            Response: Updated session data.
-        """
         try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
+            patient = Patient.objects.get(id=ObjectId(patient_id))
+        except Patient.DoesNotExist:
+            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
 
-        if session.state.current_stage != 'counsellor':
-            raise ConflictError(message="Session is not at the counsellor stage.", code="WRONG_STAGE")
-
-        if not session.counsellor_stage or not session.counsellor_stage.completed_at:
-            raise HMSError(
-                code="NOTES_NOT_SUBMITTED",
-                message="Please submit session notes before forwarding to doctor.",
-                status_code=400,
-            )
-
+        new_status = serializer.validated_data['status']
+        old_status = patient.status
         now = datetime.datetime.utcnow()
 
-        session.state.current_stage = 'doctor'
-        session.state.stage_status = 'waiting'
-        session.timestamps.updated_at = now
-        session.updated_at = now
-        session.save()
+        entry = StatusUpdate(
+            updated_by=ObjectId(request.user.id),
+            updated_by_name=request.user.full_name,
+            previous_status=old_status,
+            new_status=new_status,
+            updated_at=now,
+        )
 
-        return success_response(serialize_active_session_for_queue(session))
+        patient.status = new_status
+        patient.status_updates.append(entry)
+        patient.updated_at = now
+        patient.save()
+
+        return success_response(
+            {
+                'patient_id': str(patient.id),
+                'full_name': patient.full_name,
+                'status': patient.status,
+                'latest_status_update': {
+                    'updated_by': str(entry.updated_by),
+                    'updated_by_name': entry.updated_by_name,
+                    'previous_status': entry.previous_status,
+                    'new_status': entry.new_status,
+                    'updated_at': entry.updated_at.isoformat(),
+                },
+            }
+        )
 
 
-class ConsultantHistoryView(APIView):
-    """
-    Get counsellor's completed session history from archives.
-
-    GET /api/v1/consultant/history
-    """
+class CounsellorReportsView(APIView):
+    """Return daily, monthly, and yearly follow-up totals for current counsellor."""
 
     permission_classes = [IsConsultant]
 
     def get(self, request):
-        """
-        Return paginated visit history for visits this counsellor completed.
+        now = datetime.datetime.utcnow()
+        today = now.date()
 
-        Args:
-            request: DRF request.
+        pipeline = [
+            {
+                '$match': {
+                    'status_updates.updated_by': ObjectId(request.user.id),
+                }
+            },
+            {'$unwind': '$status_updates'},
+            {
+                '$match': {
+                    'status_updates.updated_by': ObjectId(request.user.id),
+                }
+            },
+            {
+                '$project': {
+                    'updated_at': '$status_updates.updated_at',
+                }
+            },
+            {
+                '$group': {
+                    '_id': {
+                        'year': {'$year': '$updated_at'},
+                        'month': {'$month': '$updated_at'},
+                        'day': {'$dayOfMonth': '$updated_at'},
+                    },
+                    'count': {'$sum': 1},
+                }
+            },
+        ]
 
-        Returns:
-            Response: Paginated list of archived visits.
-        """
-        hospital_id = ObjectId(request.user.hospital_id)
-        counsellor_id = ObjectId(request.user.id)
-        page, page_size = parse_pagination_params(request)
+        grouped = list(Patient._get_collection().aggregate(pipeline))
 
-        visits = Visit.objects(
-            hospital_id=hospital_id,
-            assignments__counsellor_id=counsellor_id,
-        ).order_by('-lifecycle__completed_at')
+        day_map = {}
+        for row in grouped:
+            key = (row['_id']['year'], row['_id']['month'], row['_id']['day'])
+            day_map[key] = row['count']
 
-        items, total, has_next = paginate_queryset(visits, page, page_size)
-        serialized = [serialize_visit_summary(v) for v in items]
+        daily_total = day_map.get((today.year, today.month, today.day), 0)
 
-        return paginated_response(serialized, page, page_size, total, has_next)
+        monthly_breakdown = []
+        monthly_total = 0
+        cursor = datetime.date(today.year, today.month, 1)
+        while cursor.month == today.month:
+            count = day_map.get((cursor.year, cursor.month, cursor.day), 0)
+            monthly_breakdown.append({'day': cursor.day, 'count': count})
+            monthly_total += count
+            cursor += datetime.timedelta(days=1)
+
+        yearly_breakdown = []
+        yearly_total = 0
+        for month in range(1, 13):
+            month_count = sum(
+                value
+                for (yr, mon, _), value in day_map.items()
+                if yr == today.year and mon == month
+            )
+            yearly_breakdown.append({'month': month, 'count': month_count})
+            yearly_total += month_count
+
+        return success_response(
+            {
+                'daily': {
+                    'date': today.isoformat(),
+                    'total_followups': daily_total,
+                },
+                'monthly': {
+                    'year': today.year,
+                    'month': today.month,
+                    'breakdown': monthly_breakdown,
+                    'total': monthly_total,
+                },
+                'yearly': {
+                    'year': today.year,
+                    'breakdown': yearly_breakdown,
+                    'total': yearly_total,
+                },
+            }
+        )

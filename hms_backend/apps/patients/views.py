@@ -1,373 +1,226 @@
-"""
-Patient views for cross-role patient operations.
-
-Handles patient registration, lookup, and history retrieval.
-"""
+"""Patient module endpoints for registration, lookup, and profile updates."""
 import datetime
-import logging
 import uuid
 
-from rest_framework.views import APIView
 from bson import ObjectId
-from django.conf import settings
+from rest_framework.exceptions import ValidationError
+from rest_framework.views import APIView
 
-from apps.auth_app.permissions import IsReceptionist, IsReceptionistOrConsultantOrDoctor, IsConsultantOrDoctor
-from apps.patients.models import Patient, Visit, Address, AddictionProfile, EmergencyContact, MedicalBackground, Biometric
-from apps.patients.serializers import (
-    PatientRegistrationSerializer, FingerprintLookupSerializer,
-    serialize_patient, serialize_patient_summary, serialize_visit_summary, serialize_visit_detail,
+from apps.auth_app.permissions import (
+    IsReceptionist,
+    IsReceptionistOrConsultant,
+    IsReceptionistOrConsultantOrDoctor,
 )
-from utils.response import success_response, paginated_response
-from utils.pagination import parse_pagination_params, paginate_queryset
-from utils.fingerprint import hash_fingerprint
-from utils.exceptions import NotFoundError, ConflictError
-
-logger = logging.getLogger(__name__)
+from apps.patients.models import (
+    Address,
+    AddictionProfile,
+    Biometric,
+    EmergencyContact,
+    MedicalBackground,
+    Patient,
+)
+from apps.patients.serializers import (
+    GENERAL_FIELDS,
+    PatientGeneralDataSerializer,
+    PatientLookupSerializer,
+    PatientRegistrationSerializer,
+    serialize_patient,
+)
+from utils.exceptions import NotFoundError
+from utils.response import success_response
 
 
 def _generate_registration_number() -> str:
-    """Generate a 'PAT-YYYYMMDD-XXXX' registration number."""
     date_part = datetime.datetime.utcnow().strftime('%Y%m%d')
     rand_part = uuid.uuid4().hex[:4].upper()
     return f"PAT-{date_part}-{rand_part}"
 
 
 def _generate_patient_uid() -> str:
-    """Generate a unique patient UID."""
     return f"PID-{uuid.uuid4().hex[:12].upper()}"
 
 
-class RegisterPatientView(APIView):
-    """
-    Register a new patient.
+def _is_filled(value):
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ''
+    return True
 
-    POST /api/v1/patients
-    """
+
+def _recalculate_general_data_complete(patient: Patient) -> bool:
+    payload = serialize_patient(patient)
+    for field in GENERAL_FIELDS:
+        if not _is_filled(payload.get(field)):
+            return False
+    return True
+
+
+class RegisterPatientView(APIView):
+    """Create a patient using only Tier 1 mandatory fields."""
 
     permission_classes = [IsReceptionist]
 
     def post(self, request):
-        """
-        Create a new patient record with demographics, addiction profile, and fingerprint hash.
-
-        Args:
-            request: DRF request with patient registration data.
-
-        Returns:
-            Response: Created patient data.
-
-        Raises:
-            ConflictError: If fingerprint hash already exists.
-        """
         serializer = PatientRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
+        now = datetime.datetime.utcnow()
         hospital_id = ObjectId(request.user.hospital_id)
 
-        # Hash the fingerprint template
-        fp_hash = hash_fingerprint(data['fingerprint_template'])
-
-        # Check for duplicate fingerprint
+        registration_number = data.get('file_number') or _generate_registration_number()
         existing = Patient.objects(
             hospital_id=hospital_id,
-            biometric__fingerprint_hash_sha256=fp_hash,
+            registration_number=registration_number,
         ).first()
         if existing:
-            raise ConflictError(
-                message="A patient with this fingerprint is already registered.",
-                code="DUPLICATE_FINGERPRINT",
-            )
+            raise ValidationError({'file_number': 'This file number already exists.'})
 
-        now = datetime.datetime.utcnow()
+        aadhaar_number = (data.get('aadhaar_number') or '').strip()
+        aadhaar_digits = ''.join(ch for ch in aadhaar_number if ch.isdigit())
+        aadhaar_last4 = aadhaar_digits[-4:] if aadhaar_digits else None
+
+        relative_phone = (data.get('relative_phone') or '').strip()
+        address_line1 = (data.get('address_line1') or '').strip()
 
         patient = Patient(
             hospital_id=hospital_id,
             patient_uid=_generate_patient_uid(),
-            registration_number=_generate_registration_number(),
+            registration_number=registration_number,
+            patient_category=data.get('patient_category'),
             full_name=data['full_name'],
-            date_of_birth=data['date_of_birth'],
-            gender=data['gender'],
-            blood_group=data.get('blood_group'),
-            phone=data['phone'],
-            email=data.get('email'),
-            address=Address(
-                line1=data['address']['line1'],
-                city=data['address']['city'],
-                state=data['address']['state'],
-                pincode=data['address']['pincode'],
-            ),
-            aadhaar_number_last4=data.get('aadhaar_number_last4'),
-            addiction_profile=AddictionProfile(
-                addiction_type=data['addiction_type'],
-                addiction_duration_text=data.get('addiction_duration_text'),
-            ),
-            emergency_contact=EmergencyContact(
-                name=data['emergency_contact']['name'],
-                phone=data['emergency_contact']['phone'],
-                relation=data['emergency_contact']['relation'],
-            ),
-            medical_background=MedicalBackground(
-                family_history=data.get('family_history'),
-                medical_history=data.get('medical_history'),
-                allergies=data.get('allergies'),
-                current_medications=data.get('current_medications'),
-                previous_treatments=data.get('previous_treatments'),
-            ),
+            phone=data['phone_number'],
+            date_of_birth=datetime.datetime.combine(data['date_of_birth'], datetime.time()),
+            gender=data['sex'],
+            aadhaar_number_last4=aadhaar_last4,
             biometric=Biometric(
-                fingerprint_hash_sha256=fp_hash,
+                fingerprint_hash_sha256=data['fingerprint_hash'],
                 fingerprint_hash_version='sha256-v1',
                 fingerprint_enrolled_at=now,
             ),
+            general_data_complete=False,
             status='active',
             created_by=ObjectId(request.user.id),
             created_at=now,
             updated_at=now,
         )
+
+        if relative_phone:
+            patient.emergency_contact = EmergencyContact(
+                name='',
+                phone=relative_phone,
+                relation='relative',
+            )
+
+        if address_line1:
+            patient.address = Address(
+                line1=address_line1,
+                city='',
+                state='',
+                pincode='',
+            )
+
         patient.save()
 
         return success_response(serialize_patient(patient), status=201)
 
 
-class GetPatientView(APIView):
-    """
-    Retrieve a patient by ID.
+class UpdatePatientGeneralView(APIView):
+    """Patch any subset of Tier 2 optional fields for a patient."""
 
-    GET /api/v1/patients/{patientId}
-    """
+    permission_classes = [IsReceptionistOrConsultant]
 
-    permission_classes = [IsReceptionistOrConsultantOrDoctor]
-
-    def get(self, request, patient_id):
-        """
-        Fetch a single patient document.
-
-        Args:
-            request: DRF request.
-            patient_id: Patient ObjectId string.
-
-        Returns:
-            Response: Full patient data.
-
-        Raises:
-            NotFoundError: If patient does not exist.
-        """
-        try:
-            patient = Patient.objects.get(id=ObjectId(patient_id))
-        except Patient.DoesNotExist:
-            raise NotFoundError(message="Patient not found.", code="PATIENT_NOT_FOUND")
-
-        return success_response(serialize_patient(patient))
-
-
-class GetPatientByRegistrationView(APIView):
-    """
-    Retrieve a patient by registration number.
-
-    GET /api/v1/patients/by-registration/{registrationNumber}
-    """
-
-    permission_classes = [IsReceptionist]
-
-    def get(self, request, registration_number):
-        """
-        Fetch a patient by their registration number.
-
-        Args:
-            request: DRF request.
-            registration_number: Patient registration number string.
-
-        Returns:
-            Response: Full patient data.
-
-        Raises:
-            NotFoundError: If no patient with this registration number.
-        """
-        hospital_id = ObjectId(request.user.hospital_id)
-        try:
-            patient = Patient.objects.get(
-                hospital_id=hospital_id,
-                registration_number=registration_number,
-            )
-        except Patient.DoesNotExist:
-            raise NotFoundError(message="Patient not found.", code="PATIENT_NOT_FOUND")
-
-        return success_response(serialize_patient(patient))
-
-
-class LookupFingerprintView(APIView):
-    """
-    Look up a patient by fingerprint template hash.
-
-    POST /api/v1/patients/lookup-fingerprint
-    """
-
-    permission_classes = [IsReceptionist]
-
-    def post(self, request):
-        """
-        Hash the provided fingerprint and look up matching patient.
-
-        Args:
-            request: DRF request with fingerprint_template.
-
-        Returns:
-            Response: Matching patient data or not found response.
-        """
-        serializer = FingerprintLookupSerializer(data=request.data)
+    def patch(self, request, patient_id):
+        serializer = PatientGeneralDataSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
-        fp_hash = hash_fingerprint(serializer.validated_data['fingerprint_template'])
-        hospital_id = ObjectId(request.user.hospital_id)
+        try:
+            patient = Patient.objects.get(id=ObjectId(patient_id))
+        except Patient.DoesNotExist:
+            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
 
-        patient = Patient.objects(
-            hospital_id=hospital_id,
-            biometric__fingerprint_hash_sha256=fp_hash,
-        ).first()
+        data = serializer.validated_data
 
-        if not patient:
-            raise NotFoundError(message="No patient found for this fingerprint.", code="FINGERPRINT_NOT_FOUND")
+        if any(field in data for field in ['address_line1', 'city', 'state', 'pincode']):
+            patient.address = Address(
+                line1=data.get('address_line1', patient.address.line1 if patient.address else ''),
+                city=data.get('city', patient.address.city if patient.address else ''),
+                state=data.get('state', patient.address.state if patient.address else ''),
+                pincode=data.get('pincode', patient.address.pincode if patient.address else ''),
+            )
+
+        if any(field in data for field in ['addiction_type', 'addiction_duration_text']):
+            patient.addiction_profile = AddictionProfile(
+                addiction_type=data.get('addiction_type', patient.addiction_profile.addiction_type if patient.addiction_profile else 'other'),
+                addiction_duration_text=data.get('addiction_duration_text', patient.addiction_profile.addiction_duration_text if patient.addiction_profile else ''),
+            )
+
+        if any(field in data for field in ['emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relation']):
+            patient.emergency_contact = EmergencyContact(
+                name=data.get('emergency_contact_name', patient.emergency_contact.name if patient.emergency_contact else ''),
+                phone=data.get('emergency_contact_phone', patient.emergency_contact.phone if patient.emergency_contact else ''),
+                relation=data.get('emergency_contact_relation', patient.emergency_contact.relation if patient.emergency_contact else ''),
+            )
+
+        if any(field in data for field in ['family_history', 'medical_history', 'allergies', 'current_medications', 'previous_treatments']):
+            patient.medical_background = MedicalBackground(
+                family_history=data.get('family_history', patient.medical_background.family_history if patient.medical_background else ''),
+                medical_history=data.get('medical_history', patient.medical_background.medical_history if patient.medical_background else ''),
+                allergies=data.get('allergies', patient.medical_background.allergies if patient.medical_background else ''),
+                current_medications=data.get('current_medications', patient.medical_background.current_medications if patient.medical_background else ''),
+                previous_treatments=data.get('previous_treatments', patient.medical_background.previous_treatments if patient.medical_background else ''),
+            )
+
+        for scalar in ['blood_group', 'email', 'aadhaar_number_last4']:
+            if scalar in data:
+                setattr(patient, scalar, data[scalar])
+
+        patient.general_data_complete = _recalculate_general_data_complete(patient)
+        patient.updated_at = datetime.datetime.utcnow()
+        patient.save()
 
         return success_response(serialize_patient(patient))
 
 
-class PatientSearchView(APIView):
-    """
-    Search patients by name, phone, or registration number.
-
-    GET /api/v1/patients/search?q=...
-    """
+class GetPatientView(APIView):
+    """Return full patient details including current status field."""
 
     permission_classes = [IsReceptionistOrConsultantOrDoctor]
+
+    def get(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(id=ObjectId(patient_id))
+        except Patient.DoesNotExist:
+            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        return success_response(serialize_patient(patient))
+
+
+class PatientLookupView(APIView):
+    """Lookup patient by registration number or fingerprint hash for check-in."""
+
+    permission_classes = [IsReceptionist]
 
     def get(self, request):
-        """
-        Search patients with a text query.
+        serializer = PatientLookupSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        query = serializer.validated_data
 
-        Args:
-            request: DRF request with 'q' query parameter.
-
-        Returns:
-            Response: Paginated list of matching patients.
-        """
-        query = request.query_params.get('q', '').strip()
         hospital_id = ObjectId(request.user.hospital_id)
-        page, page_size = parse_pagination_params(request)
 
-        if query:
-            # Use regex for partial matching
-            import re
-            pattern = re.compile(re.escape(query), re.IGNORECASE)
-            patients = Patient.objects(
+        patient = None
+        if query.get('registration_number'):
+            patient = Patient.objects(
                 hospital_id=hospital_id,
-            ).filter(
-                __raw__={
-                    '$or': [
-                        {'full_name': {'$regex': pattern.pattern, '$options': 'i'}},
-                        {'registration_number': {'$regex': pattern.pattern, '$options': 'i'}},
-                        {'phone': {'$regex': pattern.pattern, '$options': 'i'}},
-                    ]
-                }
-            ).order_by('-updated_at')
-        else:
-            patients = Patient.objects(hospital_id=hospital_id).order_by('-updated_at')
+                registration_number=query['registration_number'],
+            ).first()
+        elif query.get('fingerprint_hash'):
+            patient = Patient.objects(
+                hospital_id=hospital_id,
+                biometric__fingerprint_hash_sha256=query['fingerprint_hash'],
+            ).first()
 
-        items, total, has_next = paginate_queryset(patients, page, page_size)
-        serialized = [serialize_patient_summary(p) for p in items]
+        if not patient:
+            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
 
-        return paginated_response(serialized, page, page_size, total, has_next)
-
-
-class PatientSummaryView(APIView):
-    """
-    Get patient summary with basic info and visit count.
-
-    GET /api/v1/patients/{patientId}/summary
-    """
-
-    permission_classes = [IsReceptionistOrConsultantOrDoctor]
-
-    def get(self, request, patient_id):
-        """
-        Return a lightweight patient summary.
-
-        Args:
-            request: DRF request.
-            patient_id: Patient ObjectId string.
-
-        Returns:
-            Response: Patient summary data.
-        """
-        try:
-            patient = Patient.objects.get(id=ObjectId(patient_id))
-        except Patient.DoesNotExist:
-            raise NotFoundError(message="Patient not found.", code="PATIENT_NOT_FOUND")
-
-        return success_response(serialize_patient_summary(patient))
-
-
-class PatientHistoryView(APIView):
-    """
-    Get patient visit history from the archive.
-
-    GET /api/v1/patients/{patientId}/history
-    """
-
-    permission_classes = [IsConsultantOrDoctor]
-
-    def get(self, request, patient_id):
-        """
-        Return paginated visit history for a patient.
-
-        Args:
-            request: DRF request.
-            patient_id: Patient ObjectId string.
-
-        Returns:
-            Response: Paginated list of archived visit summaries.
-        """
-        try:
-            patient = Patient.objects.get(id=ObjectId(patient_id))
-        except Patient.DoesNotExist:
-            raise NotFoundError(message="Patient not found.", code="PATIENT_NOT_FOUND")
-
-        hospital_id = ObjectId(request.user.hospital_id)
-        page, page_size = parse_pagination_params(request)
-
-        visits = Visit.objects(
-            hospital_id=hospital_id,
-            patient_id=patient.id,
-        ).order_by('-visit_date')
-
-        items, total, has_next = paginate_queryset(visits, page, page_size)
-        serialized = [serialize_visit_summary(v) for v in items]
-
-        return paginated_response(serialized, page, page_size, total, has_next)
-
-
-class VisitDetailView(APIView):
-    """
-    Get detailed archived visit record.
-
-    GET /api/v1/visits/{visitId}/detail
-    """
-
-    permission_classes = [IsConsultantOrDoctor]
-
-    def get(self, request, visit_id):
-        """
-        Return full detail of an archived visit.
-
-        Args:
-            request: DRF request.
-            visit_id: Visit ObjectId string.
-
-        Returns:
-            Response: Complete visit data with all stages.
-        """
-        try:
-            visit = Visit.objects.get(id=ObjectId(visit_id))
-        except Visit.DoesNotExist:
-            raise NotFoundError(message="Visit not found.", code="VISIT_NOT_FOUND")
-
-        return success_response(serialize_visit_detail(visit))
+        return success_response(serialize_patient(patient))

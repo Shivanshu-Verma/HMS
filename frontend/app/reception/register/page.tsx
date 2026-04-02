@@ -1,625 +1,835 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { patientsApi } from "@/lib/api-client";
-import { simulateFingerprint } from "@/lib/biometric";
-import type { Gender, AddictionType } from "@/lib/types";
-import { toast } from "sonner";
+import { useState, useRef, useEffect } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { generateRegistrationNumber } from '@/lib/demo-store';
+import { simulateFingerprint } from '@/lib/biometric';
+import type { Gender, PatientCategory } from '@/lib/types';
+import { PATIENT_CATEGORY_LABELS } from '@/lib/types';
+import { registerPatientTier1 } from '@/lib/hms-api';
+import { useAuth } from '@/lib/auth-context';
+import { toast } from 'sonner';
 import {
   User,
   Phone,
-  MapPin,
-  Heart,
-  AlertTriangle,
   Fingerprint,
   Loader2,
   Save,
   ArrowLeft,
-} from "lucide-react";
-import Link from "next/link";
+  Zap,
+  FileText,
+  CheckCircle,
+  Info,
+  Camera,
+  MapPin,
+  Calendar,
+  Hash,
+  X,
+  RefreshCw,
+  CreditCard,
+} from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { navigate } from '@/lib/navigation';
 
 export default function RegisterPatientPage() {
-  const router = useRouter();
+  const { accessToken } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCapturingFingerprint, setIsCapturingFingerprint] = useState(false);
   const [fingerprintCaptured, setFingerprintCaptured] = useState(false);
+  const [registrationComplete, setRegistrationComplete] = useState(false);
+  const [newRegistrationNumber, setNewRegistrationNumber] = useState('');
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
-  const [formData, setFormData] = useState({
-    full_name: "",
-    date_of_birth: "",
-    gender: "" as Gender | "",
-    blood_group: "",
-    phone: "",
-    email: "",
-    address: "",
-    city: "",
-    state: "",
-    pincode: "",
-    aadhaar_number: "",
-    addiction_type: "" as AddictionType | "",
-    addiction_duration: "",
-    emergency_contact_name: "",
-    emergency_contact_phone: "",
-    emergency_contact_relation: "",
-    family_history: "",
-    medical_history: "",
-    allergies: "",
-    current_medications: "",
-    previous_treatments: "",
-    fingerprint_template: "",
+  // Instant registration form data
+  const [instantFormData, setInstantFormData] = useState({
+    patient_category: '' as PatientCategory | '',
+    full_name: '',
+    file_number: '',
+    aadhaar_number: '',
+    date_of_birth: '',
+    sex: '' as Gender | '',
+    phone: '',
+    relative_phone: '',
+    address: '',
+    fingerprint_template: '',
+    photo: '',
   });
 
-  const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+  // Generate file number on mount
+  useEffect(() => {
+    setInstantFormData(prev => ({
+      ...prev,
+      file_number: generateRegistrationNumber()
+    }));
+  }, []);
+
+  const handleInstantChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
   ) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    setInstantFormData({ ...instantFormData, [e.target.name]: e.target.value });
   };
 
-  const handleSelectChange = (name: string, value: string) => {
-    setFormData({ ...formData, [name]: value });
+  const generateNewFileNumber = () => {
+    setInstantFormData(prev => ({
+      ...prev,
+      file_number: generateRegistrationNumber()
+    }));
+    toast.success('New file number generated');
+  };
+
+  // Check if file number already exists
+  const isFileNumberUnique = (fileNumber: string): boolean => {
+    return !!fileNumber;
+  };
+
+  // Check if Aadhaar number already exists
+  const isAadhaarUnique = (aadhaar: string): boolean => {
+    return true;
+  };
+
+  // Format Aadhaar number with spaces (XXXX XXXX XXXX)
+  const formatAadhaar = (value: string): string => {
+    const digits = value.replace(/\D/g, '').slice(0, 12);
+    const parts = [];
+    for (let i = 0; i < digits.length; i += 4) {
+      parts.push(digits.slice(i, i + 4));
+    }
+    return parts.join(' ');
+  };
+
+  const handleAadhaarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatAadhaar(e.target.value);
+    setInstantFormData({ ...instantFormData, aadhaar_number: formatted });
   };
 
   const handleCaptureFingerprint = async () => {
     setIsCapturingFingerprint(true);
     const result = await simulateFingerprint();
-
+    
     if (result.success && result.data) {
-      setFormData({ ...formData, fingerprint_template: result.data });
+      setInstantFormData({ ...instantFormData, fingerprint_template: result.data });
       setFingerprintCaptured(true);
-      toast.success("Fingerprint captured successfully!");
+      toast.success('Fingerprint captured successfully!');
     } else {
-      toast.error(result.error || "Failed to capture fingerprint");
+      toast.error(result.error || 'Failed to capture fingerprint');
     }
-
+    
     setIsCapturingFingerprint(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Camera functions
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'user', width: 640, height: 480 } 
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+      setIsCameraOpen(true);
+    } catch {
+      toast.error('Unable to access camera. Please check permissions.');
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    setIsCameraOpen(false);
+  };
+
+  const capturePhoto = () => {
+    if (videoRef.current && canvasRef.current) {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        setPhotoPreview(dataUrl);
+        setInstantFormData(prev => ({ ...prev, photo: dataUrl }));
+        stopCamera();
+        toast.success('Photo captured successfully!');
+      }
+    }
+  };
+
+  const removePhoto = () => {
+    setPhotoPreview(null);
+    setInstantFormData(prev => ({ ...prev, photo: '' }));
+  };
+
+  // Cleanup camera on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  const handleInstantSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     // Validation
-    if (
-      !formData.full_name ||
-      !formData.phone ||
-      !formData.gender ||
-      !formData.addiction_type
-    ) {
-      toast.error("Please fill in all required fields");
+    if (!instantFormData.patient_category) {
+      toast.error('Please select patient category (Psychiatric or De-Addiction)');
       return;
     }
 
-    if (!formData.emergency_contact_name || !formData.emergency_contact_phone) {
-      toast.error("Emergency contact information is required");
+    if (!instantFormData.full_name || !instantFormData.phone || !instantFormData.date_of_birth || !instantFormData.sex) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    if (!instantFormData.relative_phone) {
+      toast.error('Relative mobile number is required');
+      return;
+    }
+
+    if (!instantFormData.address) {
+      toast.error('Address is required');
+      return;
+    }
+
+    // Check file number uniqueness
+    if (!isFileNumberUnique(instantFormData.file_number)) {
+      toast.error('This file number already exists. Please generate a new one.');
+      return;
+    }
+
+    // Validate Aadhaar format (12 digits)
+    const aadhaarDigits = instantFormData.aadhaar_number.replace(/\s/g, '');
+    if (instantFormData.aadhaar_number && aadhaarDigits.length !== 12) {
+      toast.error('Aadhaar number must be 12 digits');
+      return;
+    }
+
+    // Check Aadhaar uniqueness
+    if (aadhaarDigits && !isAadhaarUnique(aadhaarDigits)) {
+      toast.error('This Aadhaar number is already registered with another patient.');
       return;
     }
 
     setIsSubmitting(true);
 
-    try {
-      const payload = {
-        full_name: formData.full_name,
-        date_of_birth: formData.date_of_birth
-          ? `${formData.date_of_birth}T00:00:00Z`
-          : new Date().toISOString(),
-        gender: formData.gender,
-        blood_group: formData.blood_group || "",
-        phone: formData.phone,
-        email: formData.email || "",
-        address: {
-          line1: formData.address,
-          city: formData.city,
-          state: formData.state,
-          pincode: formData.pincode,
-        },
-        aadhaar_number_last4: formData.aadhaar_number
-          ? formData.aadhaar_number.slice(-4)
-          : "",
-        addiction_type: formData.addiction_type,
-        addiction_duration_text: formData.addiction_duration || "",
-        emergency_contact: {
-          name: formData.emergency_contact_name,
-          phone: formData.emergency_contact_phone,
-          relation: formData.emergency_contact_relation || "Other",
-        },
-        family_history: formData.family_history || "",
-        medical_history: formData.medical_history || "",
-        allergies: formData.allergies || "",
-        current_medications: formData.current_medications || "",
-        previous_treatments: formData.previous_treatments || "",
-        fingerprint_template: formData.fingerprint_template || "manual-entry",
-      };
+    if (!accessToken) {
+      toast.error('Please sign in again.');
+      setIsSubmitting(false);
+      return;
+    }
 
-      const result = await patientsApi.register(payload);
-      if (result.success && result.data) {
-        toast.success(
-          `Patient registered successfully! Registration No: ${result.data.registration_number}`,
-        );
-        router.push("/reception/checkin");
-      } else {
-        toast.error("Patient registration failed");
-      }
-    } catch (error: any) {
-      toast.error(error?.message || "Patient registration failed");
+    try {
+      const result = await registerPatientTier1(accessToken, {
+        patient_category: instantFormData.patient_category,
+        file_number: instantFormData.file_number,
+        full_name: instantFormData.full_name,
+        phone_number: instantFormData.phone,
+        date_of_birth: instantFormData.date_of_birth,
+        sex: instantFormData.sex,
+        fingerprint_hash: instantFormData.fingerprint_template || `manual-${Date.now()}`,
+        aadhaar_number: aadhaarDigits || undefined,
+        relative_phone: instantFormData.relative_phone,
+        address_line1: instantFormData.address,
+      });
+
+      setNewRegistrationNumber(result.registration_number);
+      setRegistrationComplete(true);
+      toast.success(`Patient registered successfully! File No: ${result.registration_number}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Registration failed');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const handleNewRegistration = () => {
+    setInstantFormData({
+      patient_category: '',
+      full_name: '',
+      file_number: generateRegistrationNumber(),
+      aadhaar_number: '',
+      date_of_birth: '',
+      sex: '',
+      phone: '',
+      relative_phone: '',
+      address: '',
+      fingerprint_template: '',
+      photo: '',
+    });
+    setPhotoPreview(null);
+    setFingerprintCaptured(false);
+    setRegistrationComplete(false);
+    setNewRegistrationNumber('');
+  };
+
+  if (registrationComplete) {
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center gap-4">
+<Button variant="ghost" size="icon" onClick={() => navigate('/reception')}>
+                    <ArrowLeft className="h-4 w-4" />
+                </Button>
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Registration Complete</h1>
+            <p className="text-muted-foreground">
+              Patient has been registered successfully
+            </p>
+          </div>
+        </div>
+
+        <Card className="max-w-lg mx-auto border-0 shadow-xl">
+          <CardContent className="pt-8 pb-8">
+            <div className="text-center space-y-6">
+              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mx-auto shadow-lg">
+                <CheckCircle className="h-10 w-10 text-white" />
+              </div>
+              
+              <div>
+                <h2 className="text-2xl font-bold text-foreground mb-2">Registration Successful!</h2>
+                <p className="text-muted-foreground">The patient has been added to the system</p>
+              </div>
+
+              <div className="bg-gradient-to-r from-teal-50 to-emerald-50 dark:from-teal-900/20 dark:to-emerald-900/20 rounded-xl p-6 border border-teal-200 dark:border-teal-800">
+                <p className="text-sm text-muted-foreground mb-1">File Number</p>
+                <p className="text-3xl font-bold text-teal-700 dark:text-teal-400">{newRegistrationNumber}</p>
+              </div>
+
+              <Alert className="text-left bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
+                <Info className="h-4 w-4 text-blue-600" />
+                <AlertDescription className="text-blue-700 dark:text-blue-300">
+                  Mandatory registration details are now saved immediately. Additional general profile data (addiction type, medical history, allergies, etc.)
+                  from the <strong>Patient Data</strong> section.
+                </AlertDescription>
+              </Alert>
+
+              <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                <Button 
+                  onClick={handleNewRegistration}
+                  className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700"
+                >
+                  <User className="h-4 w-4 mr-2" />
+                  Register Another Patient
+                </Button>
+<Button variant="outline" className="flex-1" onClick={() => navigate('/reception/patients')}>
+                          <FileText className="h-4 w-4 mr-2" />
+                          Go to Patient Data
+                      </Button>
+              </div>
+
+<Button variant="ghost" className="w-full" onClick={() => navigate('/reception/checkin')}>
+                          <Fingerprint className="h-4 w-4 mr-2" />
+                          Go to Check-in
+                      </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild>
-          <Link href="/reception">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
+<Button variant="ghost" size="icon" onClick={() => navigate('/reception')}>
+                    <ArrowLeft className="h-4 w-4" />
+                </Button>
         <div>
-          <h1 className="text-2xl font-bold text-foreground">
-            Register New Patient
-          </h1>
+          <h1 className="text-2xl font-bold text-foreground">Register New Patient</h1>
           <p className="text-muted-foreground">
-            Enter patient details to create a new record
+            Quick registration for new patients
           </p>
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* Personal Information */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <User className="h-5 w-5 text-primary" />
-                <CardTitle className="text-lg">Personal Information</CardTitle>
-              </div>
-              <CardDescription>Basic patient details</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="sm:col-span-2">
-                  <Label htmlFor="full_name">
-                    Full Name <span className="text-destructive">*</span>
+      <Tabs defaultValue="instant" className="space-y-6">
+        <TabsList className="grid w-full max-w-md grid-cols-2 mx-auto">
+          <TabsTrigger value="instant" className="flex items-center gap-2">
+            <Zap className="h-4 w-4" />
+            Instant Registration
+          </TabsTrigger>
+          <TabsTrigger value="info" className="flex items-center gap-2">
+            <Info className="h-4 w-4" />
+            How It Works
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="instant">
+          <form onSubmit={handleInstantSubmit} className="space-y-6">
+            {/* Patient Category Selection - Required First */}
+            <Card className="border-0 shadow-lg bg-gradient-to-r from-[#0d7377]/5 to-[#14919b]/5">
+              <CardContent className="pt-6">
+                <div className="flex flex-col items-center gap-4">
+                  <Label className="text-lg font-semibold text-center">
+                    Select Patient Category <span className="text-destructive">*</span>
                   </Label>
-                  <Input
-                    id="full_name"
-                    name="full_name"
-                    value={formData.full_name}
-                    onChange={handleChange}
-                    placeholder="Enter full name"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="date_of_birth">Date of Birth</Label>
-                  <Input
-                    id="date_of_birth"
-                    name="date_of_birth"
-                    type="date"
-                    value={formData.date_of_birth}
-                    onChange={handleChange}
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="gender">
-                    Gender <span className="text-destructive">*</span>
-                  </Label>
-                  <Select
-                    value={formData.gender}
-                    onValueChange={(v) => handleSelectChange("gender", v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select gender" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="male">Male</SelectItem>
-                      <SelectItem value="female">Female</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="blood_group">Blood Group</Label>
-                  <Select
-                    value={formData.blood_group}
-                    onValueChange={(v) => handleSelectChange("blood_group", v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select blood group" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="A+">A+</SelectItem>
-                      <SelectItem value="A-">A-</SelectItem>
-                      <SelectItem value="B+">B+</SelectItem>
-                      <SelectItem value="B-">B-</SelectItem>
-                      <SelectItem value="AB+">AB+</SelectItem>
-                      <SelectItem value="AB-">AB-</SelectItem>
-                      <SelectItem value="O+">O+</SelectItem>
-                      <SelectItem value="O-">O-</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="aadhaar_number">Aadhaar Number</Label>
-                  <Input
-                    id="aadhaar_number"
-                    name="aadhaar_number"
-                    value={formData.aadhaar_number}
-                    onChange={handleChange}
-                    placeholder="XXXX XXXX XXXX"
-                    maxLength={14}
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Contact Information */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Phone className="h-5 w-5 text-primary" />
-                <CardTitle className="text-lg">Contact Information</CardTitle>
-              </div>
-              <CardDescription>How to reach the patient</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="phone">
-                    Phone Number <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    id="phone"
-                    name="phone"
-                    type="tel"
-                    value={formData.phone}
-                    onChange={handleChange}
-                    placeholder="Enter phone number"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    name="email"
-                    type="email"
-                    value={formData.email}
-                    onChange={handleChange}
-                    placeholder="Enter email address"
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <Label htmlFor="address">Address</Label>
-                  <Input
-                    id="address"
-                    name="address"
-                    value={formData.address}
-                    onChange={handleChange}
-                    placeholder="Street address"
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="city">City</Label>
-                  <Input
-                    id="city"
-                    name="city"
-                    value={formData.city}
-                    onChange={handleChange}
-                    placeholder="City"
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="state">State</Label>
-                  <Input
-                    id="state"
-                    name="state"
-                    value={formData.state}
-                    onChange={handleChange}
-                    placeholder="State"
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="pincode">Pincode</Label>
-                  <Input
-                    id="pincode"
-                    name="pincode"
-                    value={formData.pincode}
-                    onChange={handleChange}
-                    placeholder="Pincode"
-                    maxLength={6}
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Addiction Details */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Heart className="h-5 w-5 text-primary" />
-                <CardTitle className="text-lg">Addiction Details</CardTitle>
-              </div>
-              <CardDescription>Primary condition information</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="addiction_type">
-                    Addiction Type <span className="text-destructive">*</span>
-                  </Label>
-                  <Select
-                    value={formData.addiction_type}
-                    onValueChange={(v) =>
-                      handleSelectChange("addiction_type", v)
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="alcohol">Alcohol</SelectItem>
-                      <SelectItem value="drugs">Drugs</SelectItem>
-                      <SelectItem value="tobacco">Tobacco</SelectItem>
-                      <SelectItem value="gambling">Gambling</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="addiction_duration">
-                    Duration of Addiction
-                  </Label>
-                  <Input
-                    id="addiction_duration"
-                    name="addiction_duration"
-                    value={formData.addiction_duration}
-                    onChange={handleChange}
-                    placeholder="e.g., 5 years"
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <Label htmlFor="previous_treatments">
-                    Previous Treatments
-                  </Label>
-                  <Textarea
-                    id="previous_treatments"
-                    name="previous_treatments"
-                    value={formData.previous_treatments}
-                    onChange={handleChange}
-                    placeholder="Any previous treatment history"
-                    rows={3}
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Emergency Contact */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-primary" />
-                <CardTitle className="text-lg">Emergency Contact</CardTitle>
-              </div>
-              <CardDescription>Required for emergencies</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="sm:col-span-2">
-                  <Label htmlFor="emergency_contact_name">
-                    Contact Name <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    id="emergency_contact_name"
-                    name="emergency_contact_name"
-                    value={formData.emergency_contact_name}
-                    onChange={handleChange}
-                    placeholder="Emergency contact name"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="emergency_contact_phone">
-                    Contact Phone <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    id="emergency_contact_phone"
-                    name="emergency_contact_phone"
-                    type="tel"
-                    value={formData.emergency_contact_phone}
-                    onChange={handleChange}
-                    placeholder="Phone number"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="emergency_contact_relation">
-                    Relationship
-                  </Label>
-                  <Input
-                    id="emergency_contact_relation"
-                    name="emergency_contact_relation"
-                    value={formData.emergency_contact_relation}
-                    onChange={handleChange}
-                    placeholder="e.g., Spouse, Parent"
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Medical History */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <MapPin className="h-5 w-5 text-primary" />
-                <CardTitle className="text-lg">Medical History</CardTitle>
-              </div>
-              <CardDescription>Important health information</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="medical_history">Medical History</Label>
-                <Textarea
-                  id="medical_history"
-                  name="medical_history"
-                  value={formData.medical_history}
-                  onChange={handleChange}
-                  placeholder="Any existing medical conditions"
-                  rows={2}
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="allergies">Allergies</Label>
-                <Input
-                  id="allergies"
-                  name="allergies"
-                  value={formData.allergies}
-                  onChange={handleChange}
-                  placeholder="Known allergies"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="current_medications">Current Medications</Label>
-                <Textarea
-                  id="current_medications"
-                  name="current_medications"
-                  value={formData.current_medications}
-                  onChange={handleChange}
-                  placeholder="List of current medications"
-                  rows={2}
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="family_history">Family History</Label>
-                <Textarea
-                  id="family_history"
-                  name="family_history"
-                  value={formData.family_history}
-                  onChange={handleChange}
-                  placeholder="Relevant family medical history"
-                  rows={2}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Fingerprint Registration */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Fingerprint className="h-5 w-5 text-primary" />
-                <CardTitle className="text-lg">
-                  Biometric Registration
-                </CardTitle>
-              </div>
-              <CardDescription>
-                Capture fingerprint for future check-ins
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col items-center py-6 space-y-4">
-                <div
-                  className={`w-24 h-24 rounded-full flex items-center justify-center transition-all ${
-                    fingerprintCaptured
-                      ? "bg-emerald-100 text-emerald-600"
-                      : isCapturingFingerprint
-                        ? "bg-primary/20 animate-pulse"
-                        : "bg-secondary"
-                  }`}
-                >
-                  {isCapturingFingerprint ? (
-                    <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                  ) : (
-                    <Fingerprint
-                      className={`h-10 w-10 ${
-                        fingerprintCaptured
-                          ? "text-emerald-600"
-                          : "text-muted-foreground"
+                  <div className="flex gap-4">
+                    <Button
+                      type="button"
+                      variant={instantFormData.patient_category === 'psychiatric' ? 'default' : 'outline'}
+                      className={`h-20 w-48 flex flex-col gap-2 ${
+                        instantFormData.patient_category === 'psychiatric'
+                          ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white'
+                          : 'border-2 border-purple-300 hover:border-purple-500 hover:bg-purple-50'
                       }`}
-                    />
+                      onClick={() => setInstantFormData({ ...instantFormData, patient_category: 'psychiatric' })}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                      <span className="font-semibold">Psychiatric</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={instantFormData.patient_category === 'deaddiction' ? 'default' : 'outline'}
+                      className={`h-20 w-48 flex flex-col gap-2 ${
+                        instantFormData.patient_category === 'deaddiction'
+                          ? 'bg-gradient-to-r from-[#0d7377] to-[#14919b] hover:from-[#0a5c5f] hover:to-[#0d7377] text-white'
+                          : 'border-2 border-[#0d7377]/30 hover:border-[#0d7377] hover:bg-[#0d7377]/5'
+                      }`}
+                      onClick={() => setInstantFormData({ ...instantFormData, patient_category: 'deaddiction' })}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                      </svg>
+                      <span className="font-semibold">De-Addiction</span>
+                    </Button>
+                  </div>
+                  {!instantFormData.patient_category && (
+                    <p className="text-sm text-muted-foreground">Please select the patient category to proceed</p>
                   )}
                 </div>
+              </CardContent>
+            </Card>
 
-                <Button
-                  type="button"
-                  variant={fingerprintCaptured ? "outline" : "default"}
-                  onClick={handleCaptureFingerprint}
-                  disabled={isCapturingFingerprint}
-                >
-                  {fingerprintCaptured
-                    ? "Recapture Fingerprint"
-                    : "Capture Fingerprint"}
-                </Button>
+            <div className="grid gap-6 lg:grid-cols-2">
+              {/* Patient Basic Info */}
+              <Card className="border-0 shadow-lg">
+                <CardHeader className="pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center">
+                      <User className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg">Patient Information</CardTitle>
+                      <CardDescription>Basic details for quick registration</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* File Number */}
+                  <div>
+                    <Label htmlFor="file_number" className="flex items-center gap-2">
+                      <Hash className="h-4 w-4 text-teal-600" />
+                      File Number <span className="text-destructive">*</span>
+                    </Label>
+                    <div className="flex gap-2 mt-1.5">
+                      <Input
+                        id="file_number"
+                        name="file_number"
+                        value={instantFormData.file_number}
+                        onChange={handleInstantChange}
+                        placeholder="File number"
+                        className="font-mono text-lg font-semibold"
+                        required
+                      />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        size="icon"
+                        onClick={generateNewFileNumber}
+                        title="Generate new file number"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">Auto-generated unique number. You can modify if needed.</p>
+                  </div>
 
-                {fingerprintCaptured && (
-                  <p className="text-sm text-emerald-600">
-                    Fingerprint captured successfully
-                  </p>
+                  {/* Aadhaar Number */}
+                  <div>
+                    <Label htmlFor="aadhaar_number" className="flex items-center gap-2">
+                      <CreditCard className="h-4 w-4 text-teal-600" />
+                      Aadhaar Card Number <span className="text-muted-foreground text-xs">(Unique ID)</span>
+                    </Label>
+                    <Input
+                      id="aadhaar_number"
+                      name="aadhaar_number"
+                      value={instantFormData.aadhaar_number}
+                      onChange={handleAadhaarChange}
+                      placeholder="XXXX XXXX XXXX"
+                      className="mt-1.5 font-mono tracking-wider"
+                      maxLength={14}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">12-digit Aadhaar number. Used as unique patient identifier.</p>
+                  </div>
+
+                  {/* Full Name */}
+                  <div>
+                    <Label htmlFor="full_name" className="flex items-center gap-2">
+                      <User className="h-4 w-4 text-teal-600" />
+                      Full Name <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="full_name"
+                      name="full_name"
+                      value={instantFormData.full_name}
+                      onChange={handleInstantChange}
+                      placeholder="Enter patient's full name"
+                      className="mt-1.5"
+                      required
+                    />
+                  </div>
+
+                  {/* Date of Birth */}
+                  <div>
+                    <Label htmlFor="date_of_birth" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-teal-600" />
+                      Date of Birth <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="date_of_birth"
+                      name="date_of_birth"
+                      type="date"
+                      value={instantFormData.date_of_birth}
+                      onChange={handleInstantChange}
+                      className="mt-1.5"
+                      required
+                    />
+                  </div>
+
+                  {/* Sex */}
+                  <div>
+                    <Label htmlFor="sex" className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-teal-600" />
+                      Sex <span className="text-destructive">*</span>
+                    </Label>
+                    <select
+                      id="sex"
+                      name="sex"
+                      value={instantFormData.sex}
+                      onChange={(e) =>
+                        setInstantFormData({
+                          ...instantFormData,
+                          sex: e.target.value as Gender | '',
+                        })
+                      }
+                      className="mt-1.5 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      required
+                    >
+                      <option value="">Select sex</option>
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+
+                  {/* Mobile Numbers */}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <Label htmlFor="phone" className="flex items-center gap-2">
+                        <Phone className="h-4 w-4 text-teal-600" />
+                        Mobile Number <span className="text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="phone"
+                        name="phone"
+                        type="tel"
+                        value={instantFormData.phone}
+                        onChange={handleInstantChange}
+                        placeholder="Patient's mobile"
+                        className="mt-1.5"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="relative_phone" className="flex items-center gap-2">
+                        <Phone className="h-4 w-4 text-orange-600" />
+                        Relative Mobile <span className="text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="relative_phone"
+                        name="relative_phone"
+                        type="tel"
+                        value={instantFormData.relative_phone}
+                        onChange={handleInstantChange}
+                        placeholder="Relative's mobile"
+                        className="mt-1.5"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  {/* Address */}
+                  <div>
+                    <Label htmlFor="address" className="flex items-center gap-2">
+                      <MapPin className="h-4 w-4 text-teal-600" />
+                      Address <span className="text-destructive">*</span>
+                    </Label>
+                    <Textarea
+                      id="address"
+                      name="address"
+                      value={instantFormData.address}
+                      onChange={handleInstantChange}
+                      placeholder="Enter complete address"
+                      className="mt-1.5 min-h-[80px]"
+                      required
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Biometrics & Photo */}
+              <Card className="border-0 shadow-lg">
+                <CardHeader className="pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
+                      <Camera className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg">Photo & Biometrics</CardTitle>
+                      <CardDescription>Capture patient photo and fingerprint</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* Photo Capture Section */}
+                  <div>
+                    <Label className="mb-3 block flex items-center gap-2">
+                      <Camera className="h-4 w-4 text-blue-600" />
+                      Patient Photo
+                    </Label>
+                    
+                    {!isCameraOpen && !photoPreview && (
+                      <div className="border-2 border-dashed border-muted-foreground/25 rounded-xl p-8 text-center">
+                        <Camera className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
+                        <p className="text-sm text-muted-foreground mb-4">No photo captured yet</p>
+                        <Button type="button" variant="outline" onClick={startCamera}>
+                          <Camera className="h-4 w-4 mr-2" />
+                          Open Camera
+                        </Button>
+                      </div>
+                    )}
+
+                    {isCameraOpen && (
+                      <div className="space-y-3">
+                        <div className="relative rounded-xl overflow-hidden bg-black">
+                          <video
+                            ref={videoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="w-full aspect-[4/3] object-cover"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button type="button" onClick={capturePhoto} className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600">
+                            <Camera className="h-4 w-4 mr-2" />
+                            Capture Photo
+                          </Button>
+                          <Button type="button" variant="outline" onClick={stopCamera}>
+                            <X className="h-4 w-4 mr-2" />
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {photoPreview && (
+                      <div className="space-y-3">
+                        <div className="relative rounded-xl overflow-hidden">
+                          <img 
+                            src={photoPreview} 
+                            alt="Patient preview" 
+                            className="w-full aspect-[4/3] object-cover"
+                          />
+                          <div className="absolute top-2 right-2 flex gap-2">
+                            <Button 
+                              type="button" 
+                              size="sm" 
+                              variant="secondary"
+                              onClick={() => { removePhoto(); startCamera(); }}
+                            >
+                              <RefreshCw className="h-4 w-4 mr-1" />
+                              Retake
+                            </Button>
+                            <Button 
+                              type="button" 
+                              size="sm" 
+                              variant="destructive"
+                              onClick={removePhoto}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-emerald-600 flex items-center gap-1">
+                          <CheckCircle className="h-3 w-3" />
+                          Photo captured successfully
+                        </p>
+                      </div>
+                    )}
+                    <canvas ref={canvasRef} className="hidden" />
+                  </div>
+
+                  {/* Fingerprint Section */}
+                  <div className="pt-4 border-t">
+                    <Label className="mb-3 block flex items-center gap-2">
+                      <Fingerprint className="h-4 w-4 text-teal-600" />
+                      Fingerprint Scan
+                    </Label>
+                    <div className="flex items-center gap-4">
+                      <div
+                        className={`w-20 h-20 rounded-xl flex items-center justify-center transition-all ${
+                          fingerprintCaptured
+                            ? 'bg-emerald-100 dark:bg-emerald-900/30 border-2 border-emerald-500'
+                            : isCapturingFingerprint
+                            ? 'bg-teal-100 dark:bg-teal-900/30 animate-pulse border-2 border-teal-500'
+                            : 'bg-secondary border-2 border-transparent'
+                        }`}
+                      >
+                        {isCapturingFingerprint ? (
+                          <Loader2 className="h-10 w-10 animate-spin text-teal-600" />
+                        ) : (
+                          <Fingerprint
+                            className={`h-10 w-10 ${
+                              fingerprintCaptured ? 'text-emerald-600' : 'text-muted-foreground'
+                            }`}
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <Button
+                          type="button"
+                          variant={fingerprintCaptured ? 'outline' : 'secondary'}
+                          onClick={handleCaptureFingerprint}
+                          disabled={isCapturingFingerprint}
+                          className="w-full"
+                          size="lg"
+                        >
+                          {isCapturingFingerprint
+                            ? 'Scanning...'
+                            : fingerprintCaptured
+                            ? 'Rescan Fingerprint'
+                            : 'Scan Fingerprint'}
+                        </Button>
+                        {fingerprintCaptured && (
+                          <p className="text-xs text-emerald-600 mt-2 flex items-center gap-1">
+                            <CheckCircle className="h-3 w-3" />
+                            Fingerprint captured successfully
+                          </p>
+                        )}
+                        {!fingerprintCaptured && !isCapturingFingerprint && (
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Place finger on scanner when ready
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Submit Button */}
+            <div className="flex justify-center pt-4">
+              <Button
+                type="submit"
+                size="lg"
+                disabled={isSubmitting}
+                className="min-w-[250px] bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 shadow-lg h-12 text-lg"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                    Registering...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-5 w-5 mr-2" />
+                    Register Patient
+                  </>
                 )}
+              </Button>
+            </div>
+          </form>
+        </TabsContent>
+
+        <TabsContent value="info">
+          <Card className="max-w-2xl mx-auto border-0 shadow-lg">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Info className="h-5 w-5 text-teal-600" />
+                Two-Step Registration Process
+              </CardTitle>
+              <CardDescription>
+                How the instant registration system works
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-4">
+                <div className="flex gap-4">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center flex-shrink-0">
+                    <span className="text-white font-bold">1</span>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Instant Registration</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Capture mandatory details first: Patient Category, Name, File Number, Date of Birth, Sex, Mobile Numbers, Address, and Fingerprint.
+                      This allows patients to be registered and checked in immediately.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
+                    <span className="text-white font-bold">2</span>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Complete Profile Later</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Remaining general details can be edited later by reception or counsellor 
+                      from the <strong>Patient Data</strong> section when time permits.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <Alert className="bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-800">
+                <Zap className="h-4 w-4 text-teal-600" />
+                <AlertDescription className="text-teal-700 dark:text-teal-300">
+                  This two-step process helps reduce wait times at reception while ensuring all necessary 
+                  information is eventually captured in the system.
+                </AlertDescription>
+              </Alert>
+
+              <div className="pt-4">
+<Button className="w-full bg-gradient-to-r from-teal-600 to-emerald-600" onClick={() => navigate('/reception/patients')}>
+                            <FileText className="h-4 w-4 mr-2" />
+Go to Patient Data
+                        </Button>
               </div>
             </CardContent>
           </Card>
-        </div>
-
-        {/* Submit Button */}
-        <div className="flex justify-end gap-4">
-          <Button type="button" variant="outline" asChild>
-            <Link href="/reception">Cancel</Link>
-          </Button>
-          <Button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Registering...
-              </>
-            ) : (
-              <>
-                <Save className="h-4 w-4 mr-2" />
-                Register Patient
-              </>
-            )}
-          </Button>
-        </div>
-      </form>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

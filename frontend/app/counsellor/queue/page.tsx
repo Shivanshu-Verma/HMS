@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { consultantApi } from '@/lib/api-client';
+import { store } from '@/lib/demo-store';
+import { getCounsellorQueue } from '@/lib/hms-api';
+import { useAuth } from '@/lib/auth-context';
+import { useDemoData } from '@/lib/runtime-mode';
 import type { Visit, Patient } from '@/lib/types';
 import { PatientCard } from '@/components/patient-card';
 import { Users, Play } from 'lucide-react';
@@ -23,35 +25,71 @@ function getWaitTime(checkinTime?: string): string {
 }
 
 export default function CounsellorQueuePage() {
-  const router = useRouter();
+  const { accessToken } = useAuth();
   const [queue, setQueue] = useState<VisitWithPatient[]>([]);
 
+  const loadDemoQueue = () => {
+    const counsellorQueue = store
+      .getVisitsByStage('counsellor')
+      .map((visit) => ({
+        ...visit,
+        patient: store.getPatientById(visit.patient_id)!,
+      }))
+      .filter((v) => v.patient)
+      .sort((a, b) => {
+        const timeA = a.checkin_time ? new Date(a.checkin_time).getTime() : 0;
+        const timeB = b.checkin_time ? new Date(b.checkin_time).getTime() : 0;
+        return timeA - timeB;
+      });
+
+    setQueue(counsellorQueue);
+  };
+
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const result = await consultantApi.getQueue();
-        if (result.success && result.data?.items) {
-          const mapped = result.data.items.map((v: any) => ({
-            id: v.id,
-            patient_id: v.patient_id,
-            visit_date: v.visit_date?.split('T')[0] || '',
-            visit_number: v.visit_number,
-            current_stage: v.current_stage,
-            checkin_time: v.checkin_time,
-            status: v.status,
-            patient: v.patient || { id: v.patient_id, full_name: 'Unknown', registration_number: '', phone: '', gender: '', date_of_birth: '' },
-          }));
-          setQueue(mapped);
-        }
-      } catch (err) {
-        console.error('Failed to fetch queue:', err);
-      }
-    };
-    fetchData();
-  }, []);
+    if (useDemoData || !accessToken) {
+      loadDemoQueue();
+      return;
+    }
+
+    getCounsellorQueue(accessToken)
+      .then((res) => {
+        const mapped = res.items.map((item, index) => ({
+          id: item.session_id,
+          patient_id: item.patient_id,
+          visit_date: item.checked_in_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+          visit_number: index + 1,
+          current_stage: 'counsellor' as const,
+          checkin_time: item.checked_in_at,
+          status: 'in_progress' as const,
+          patient: {
+            id: item.patient_id,
+            registration_number: item.session_id,
+            patient_category: 'deaddiction' as const,
+            full_name: item.patient_name,
+            date_of_birth: '',
+            gender: 'other' as const,
+            phone: '',
+            address: '',
+            city: '',
+            state: '',
+            pincode: '',
+            addiction_type: 'other' as const,
+            first_visit_date: item.checked_in_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+            emergency_contact_name: '',
+            emergency_contact_phone: '',
+            emergency_contact_relation: '',
+            status: 'active' as const,
+            created_at: item.checked_in_at || new Date().toISOString(),
+            updated_at: item.checked_in_at || new Date().toISOString(),
+          },
+        }));
+        setQueue(mapped);
+      })
+      .catch(() => loadDemoQueue());
+  }, [accessToken]);
 
   const handleStartSession = (visitId: string) => {
-    router.push(`/counsellor/session/${visitId}`);
+    window.location.href = `/counsellor/session/${visitId}`;
   };
 
   return (

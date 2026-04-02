@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { consultantApi } from '@/lib/api-client';
+import { store } from '@/lib/demo-store';
 import type { CounsellorSession, Patient } from '@/lib/types';
 import { RiskBadge } from '@/components/status-badge';
 import { Search, FileText, Calendar, Clock } from 'lucide-react';
@@ -17,38 +17,16 @@ export default function SessionHistoryPage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const result = await consultantApi.getHistory();
-        if (result.success && result.data?.items) {
-          const mapped = result.data.items.map((v: any) => ({
-            id: v.id,
-            visit_id: v.id,
-            patient_id: v.patient_id || '',
-            counsellor_id: '',
-            session_notes: v.counsellor_stage?.session_notes || v.diagnosis || 'N/A',
-            mood_assessment: v.counsellor_stage?.mood_assessment || 5,
-            risk_level: v.risk_level || v.counsellor_stage?.risk_level || 'low',
-            recommendations: v.counsellor_stage?.recommendations || '',
-            follow_up_required: v.counsellor_stage?.follow_up_required || false,
-            session_duration_minutes: v.counsellor_stage?.session_duration_minutes || 0,
-            created_at: v.completed_at || v.visit_date || '',
-            patient: {
-              id: v.patient_id || '',
-              full_name: v.patient_name || 'Unknown',
-              registration_number: v.patient_registration_number || '',
-              phone: '',
-              gender: '',
-              date_of_birth: '',
-            } as any,
-          }));
-          setSessions(mapped);
-        }
-      } catch (err) {
-        console.error('Failed to fetch history:', err);
-      }
-    };
-    fetchData();
+    const allSessions = store
+      .getSessions()
+      .map((session) => ({
+        ...session,
+        patient: store.getPatientById(session.patient_id)!,
+      }))
+      .filter((s) => s.patient)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    setSessions(allSessions);
   }, []);
 
   const filteredSessions = sessions.filter((session) => {

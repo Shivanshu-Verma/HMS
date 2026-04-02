@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -9,8 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { consultantApi } from '@/lib/api-client';
+import { store, generateId } from '@/lib/demo-store';
 import { useAuth } from '@/lib/auth-context';
+import { completeCounsellorSession, getCounsellorSessionDetail } from '@/lib/hms-api';
+import { useDemoData } from '@/lib/runtime-mode';
 import type { Visit, Patient, CounsellorSession, RiskLevel } from '@/lib/types';
 import { PatientCard } from '@/components/patient-card';
 import { RiskBadge } from '@/components/status-badge';
@@ -25,13 +26,12 @@ import {
   Send,
   Loader2,
 } from 'lucide-react';
-import Link from 'next/link';
+import { navigate } from '@/lib/navigation';
 
-export default function SessionPage() {
-  const router = useRouter();
-  const params = useParams();
-  const { user } = useAuth();
-  const visitId = params.visitId as string;
+export default function SessionPage({ params }: { params: Promise<{ visitId: string }> }) {
+  const [visitId, setVisitId] = useState<string>('');
+  const [isMounted, setIsMounted] = useState(false);
+  const { user, accessToken } = useAuth();
 
   const [visit, setVisit] = useState<Visit | null>(null);
   const [patient, setPatient] = useState<Patient | null>(null);
@@ -46,40 +46,72 @@ export default function SessionPage() {
     follow_up_required: true,
   });
 
-  const [previousSessions, setPreviousSessions] = useState<any[]>([]);
+  // Get params safely after mount
+  useEffect(() => {
+    setIsMounted(true);
+    params.then((p) => setVisitId(p.visitId));
+  }, [params]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Start session
-        await consultantApi.startSession(visitId);
-        
-        // Get context
-        const result = await consultantApi.getContext(visitId);
-        if (result.success && result.data) {
-          setVisit({
-            id: result.data.id,
-            patient_id: result.data.patient_id,
-            visit_date: result.data.visit_date?.split('T')[0] || '',
-            visit_number: result.data.visit_number,
-            current_stage: result.data.current_stage,
-            checkin_time: result.data.checkin_time,
-            status: result.data.status,
-          });
-          if (result.data.patient || result.data.patient_details) {
-            const p = result.data.patient_details || result.data.patient;
-            setPatient(p as any);
-          }
-          if (result.data.previous_visits) {
-            setPreviousSessions(result.data.previous_visits);
-          }
+    if (!visitId) return;
+    if (useDemoData || !accessToken) {
+      const visitData = store.getVisitById(visitId);
+      if (visitData) {
+        setVisit(visitData);
+        const patientData = store.getPatientById(visitData.patient_id);
+        if (patientData) {
+          setPatient(patientData);
         }
-      } catch (err) {
-        console.error('Failed to load session:', err);
+
+        store.updateVisit(visitId, {
+          counsellor_start_time: new Date().toISOString(),
+          assigned_counsellor_id: user?.id,
+        });
       }
-    };
-    fetchData();
-  }, [visitId, user]);
+      return;
+    }
+
+    getCounsellorSessionDetail(accessToken, visitId)
+      .then((res) => {
+        setVisit({
+          id: res.session_id,
+          patient_id: res.patient.patient_id,
+          visit_date: res.checked_in_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+          visit_number: 1,
+          current_stage: 'counsellor',
+          checkin_time: res.checked_in_at || undefined,
+          status: 'in_progress',
+        });
+
+        setPatient({
+          id: res.patient.patient_id,
+          registration_number: res.patient.registration_number,
+          patient_category: 'deaddiction',
+          full_name: res.patient.full_name,
+          date_of_birth: res.patient.date_of_birth || '',
+          gender: res.patient.sex,
+          phone: res.patient.phone_number,
+          address: '',
+          city: '',
+          state: '',
+          pincode: '',
+          addiction_type: (res.patient.addiction_type as any) || 'other',
+          addiction_duration: res.patient.addiction_duration_text || undefined,
+          first_visit_date: res.checked_in_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+          emergency_contact_name: '',
+          emergency_contact_phone: '',
+          emergency_contact_relation: '',
+          medical_history: res.patient.medical_history || undefined,
+          allergies: res.patient.allergies || undefined,
+          status: 'active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : 'Failed to load session details');
+      });
+  }, [visitId, user, accessToken]);
 
   const handleSubmit = async () => {
     if (!formData.session_notes.trim()) {
@@ -91,25 +123,52 @@ export default function SessionPage() {
 
     setIsSubmitting(true);
 
-    try {
-      // Submit notes
-      await consultantApi.submitNotes(visitId, {
-        session_notes: formData.session_notes,
-        mood_assessment: formData.mood_assessment,
-        risk_level: formData.risk_level,
-        recommendations: formData.recommendations || '',
-        follow_up_required: formData.follow_up_required,
-      });
+    // Calculate session duration
+    const durationMinutes = Math.round((Date.now() - sessionStartTime) / 60000);
 
-      // Move to doctor stage
-      await consultantApi.assignDoctor(visitId);
-
-      toast.success('Session completed! Patient moved to doctor queue.');
-      router.push('/counsellor');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to submit session');
-      setIsSubmitting(false);
+    if (!useDemoData && accessToken) {
+      try {
+        await completeCounsellorSession(accessToken, visit.id, {
+          session_notes: formData.session_notes,
+          mood_assessment: formData.mood_assessment,
+          risk_level: formData.risk_level,
+          recommendations: formData.recommendations || undefined,
+          follow_up_required: formData.follow_up_required,
+        });
+        toast.success('Session completed and forwarded to doctor queue.');
+        window.location.href = '/counsellor';
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to submit session');
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
     }
+
+    const session: CounsellorSession = {
+      id: generateId(),
+      visit_id: visit.id,
+      patient_id: patient.id,
+      counsellor_id: user.id,
+      session_notes: formData.session_notes,
+      mood_assessment: formData.mood_assessment,
+      risk_level: formData.risk_level,
+      recommendations: formData.recommendations || undefined,
+      follow_up_required: formData.follow_up_required,
+      session_duration_minutes: Math.max(1, durationMinutes),
+      created_at: new Date().toISOString(),
+    };
+
+    store.addSession(session);
+
+    store.updateVisit(visit.id, {
+      current_stage: 'doctor',
+      counsellor_end_time: new Date().toISOString(),
+    });
+
+    setIsSubmitting(false);
+    toast.success('Session completed! Patient moved to doctor queue.');
+    window.location.href = '/counsellor';
   };
 
   if (!visit || !patient) {
@@ -120,17 +179,19 @@ export default function SessionPage() {
     );
   }
 
-
+  // Get previous sessions for this patient
+  const previousSessions = store
+    .getSessions()
+    .filter((s) => s.patient_id === patient.id)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild>
-          <Link href="/counsellor/queue">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
+<Button variant="ghost" size="icon" onClick={() => navigate('/counsellor/queue')}>
+                    <ArrowLeft className="h-4 w-4" />
+                </Button>
         <div>
           <h1 className="text-2xl font-bold text-foreground">Counselling Session</h1>
           <p className="text-muted-foreground">Session with {patient.full_name}</p>
@@ -269,9 +330,9 @@ export default function SessionPage() {
 
           {/* Submit Button */}
           <div className="flex justify-end gap-4">
-            <Button variant="outline" asChild>
-              <Link href="/counsellor/queue">Cancel</Link>
-            </Button>
+<Button variant="outline" onClick={() => navigate('/counsellor/queue')}>
+                      Cancel
+                    </Button>
             <Button onClick={handleSubmit} disabled={isSubmitting}>
               {isSubmitting ? (
                 <>

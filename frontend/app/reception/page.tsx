@@ -1,55 +1,140 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { visitsApi } from '@/lib/api-client';
-import type { DashboardStats } from '@/lib/types';
+import { store } from '@/lib/demo-store';
+import { navigate } from '@/lib/navigation';
+import type { DashboardStats, Patient, Visit } from '@/lib/types';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Fingerprint,
   UserPlus,
   Users,
-  ClipboardList,
   ArrowRight,
   Stethoscope,
   Pill,
   CheckCircle,
+  Database,
+  BarChart3,
+  TrendingUp,
+  Clock,
+  Phone,
+  MapPin,
+  FileText,
+  Eye,
+  X,
 } from 'lucide-react';
+
+interface StatData {
+  title: string;
+  description: string;
+  patients: Array<{
+    patient: Patient;
+    visit?: Visit;
+  }>;
+}
 
 export default function ReceptionDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [recentVisits, setRecentVisits] = useState<any[]>([]);
+  const [selectedStat, setSelectedStat] = useState<StatData | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [patientDetailOpen, setPatientDetailOpen] = useState(false);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const result = await visitsApi.getActive();
-        if (result.success && result.data) {
-          const items = result.data.items || [];
-          const counsellor = items.filter((v: any) => v.current_stage === 'counsellor' && v.status === 'in_progress');
-          const doctor = items.filter((v: any) => v.current_stage === 'doctor' && v.status === 'in_progress');
-          const pharmacy = items.filter((v: any) => v.current_stage === 'pharmacy' && v.status === 'in_progress');
-          const completed = items.filter((v: any) => v.status === 'completed');
-
-          setStats({
-            totalPatients: items.length,
-            todayVisits: items.length,
-            pendingCounsellor: counsellor.length,
-            pendingDoctor: doctor.length,
-            pendingPharmacy: pharmacy.length,
-            completedToday: completed.length,
-            lowStockMedicines: 0,
-            revenue: 0,
-          });
-          setRecentVisits(items.slice(0, 5));
-        }
-      } catch (err) {
-        console.error('Failed to fetch dashboard data:', err);
-      }
-    };
-    fetchData();
+    setStats(store.getDashboardStats());
   }, []);
+
+  const getStatData = (statType: string): StatData => {
+    const patients = store.getPatients();
+    const todayVisits = store.getTodayVisits();
+    
+    switch (statType) {
+      case 'total_patients':
+        return {
+          title: 'Total Patients',
+          description: 'All registered patients in the system',
+          patients: patients.map(p => ({ patient: p })),
+        };
+      case 'today_visits':
+        return {
+          title: "Today's Visits",
+          description: 'All patients who visited today',
+          patients: todayVisits.map(v => ({
+            patient: store.getPatientById(v.patient_id)!,
+            visit: v,
+          })).filter(p => p.patient),
+        };
+      case 'at_counsellor':
+        return {
+          title: 'At Counsellor',
+          description: 'Patients currently with the counsellor',
+          patients: store.getVisitsByStage('counsellor').map(v => ({
+            patient: store.getPatientById(v.patient_id)!,
+            visit: v,
+          })).filter(p => p.patient),
+        };
+      case 'at_doctor':
+        return {
+          title: 'At Doctor',
+          description: 'Patients currently with the doctor',
+          patients: store.getVisitsByStage('doctor').map(v => ({
+            patient: store.getPatientById(v.patient_id)!,
+            visit: v,
+          })).filter(p => p.patient),
+        };
+      case 'at_pharmacy':
+        return {
+          title: 'At Pharmacy',
+          description: 'Patients currently at the pharmacy',
+          patients: store.getVisitsByStage('pharmacy').map(v => ({
+            patient: store.getPatientById(v.patient_id)!,
+            visit: v,
+          })).filter(p => p.patient),
+        };
+      case 'completed_today':
+        return {
+          title: 'Completed Today',
+          description: 'Patients who completed their visit today',
+          patients: todayVisits
+            .filter(v => v.status === 'completed')
+            .map(v => ({
+              patient: store.getPatientById(v.patient_id)!,
+              visit: v,
+            })).filter(p => p.patient),
+        };
+      default:
+        return { title: '', description: '', patients: [] };
+    }
+  };
+
+  const handleStatClick = (statType: string) => {
+    const data = getStatData(statType);
+    setSelectedStat(data);
+    setSheetOpen(true);
+  };
+
+  const handleViewPatient = (patient: Patient) => {
+    setSelectedPatient(patient);
+    setPatientDetailOpen(true);
+  };
 
   const quickActions = [
     {
@@ -57,21 +142,36 @@ export default function ReceptionDashboard() {
       description: 'Scan fingerprint to check in a patient',
       href: '/reception/checkin',
       icon: Fingerprint,
-      color: 'bg-primary/10 text-primary',
+      gradient: 'from-primary/20 to-primary/5',
+      iconBg: 'bg-primary/15',
+      iconColor: 'text-primary',
     },
     {
       title: 'Register New Patient',
       description: 'Add a new patient to the system',
       href: '/reception/register',
       icon: UserPlus,
-      color: 'bg-emerald-100 text-emerald-700',
+      gradient: 'from-emerald-500/20 to-emerald-500/5',
+      iconBg: 'bg-emerald-500/15',
+      iconColor: 'text-emerald-600',
     },
     {
-      title: 'View Queue Status',
-      description: 'See all patients in the workflow',
-      href: '/reception/queue',
-      icon: ClipboardList,
-      color: 'bg-amber-100 text-amber-700',
+      title: 'Patient Data',
+      description: 'View and edit all patient records',
+      href: '/reception/patients',
+      icon: Database,
+      gradient: 'from-sky-500/20 to-sky-500/5',
+      iconBg: 'bg-sky-500/15',
+      iconColor: 'text-sky-600',
+    },
+    {
+      title: 'Reports',
+      description: 'View daily, monthly and custom reports',
+      href: '/reception/reports',
+      icon: BarChart3,
+      gradient: 'from-indigo-500/20 to-indigo-500/5',
+      iconBg: 'bg-indigo-500/15',
+      iconColor: 'text-indigo-600',
     },
   ];
 
@@ -80,127 +180,448 @@ export default function ReceptionDashboard() {
       title: 'Total Patients',
       value: stats.totalPatients,
       icon: Users,
-      color: 'text-primary',
+      gradient: 'from-primary to-primary/80',
+      trend: '+12%',
+      statType: 'total_patients',
     },
     {
       title: "Today's Visits",
       value: stats.todayVisits,
-      icon: ClipboardList,
-      color: 'text-sky-600',
+      icon: Clock,
+      gradient: 'from-sky-500 to-sky-600',
+      trend: '+5%',
+      statType: 'today_visits',
     },
     {
       title: 'At Counsellor',
       value: stats.pendingCounsellor,
       icon: Users,
-      color: 'text-amber-600',
+      gradient: 'from-amber-500 to-amber-600',
+      statType: 'at_counsellor',
     },
     {
       title: 'At Doctor',
       value: stats.pendingDoctor,
       icon: Stethoscope,
-      color: 'text-indigo-600',
+      gradient: 'from-indigo-500 to-indigo-600',
+      statType: 'at_doctor',
     },
     {
       title: 'At Pharmacy',
       value: stats.pendingPharmacy,
       icon: Pill,
-      color: 'text-rose-600',
+      gradient: 'from-rose-500 to-rose-600',
+      statType: 'at_pharmacy',
     },
     {
       title: 'Completed Today',
       value: stats.completedToday,
       icon: CheckCircle,
-      color: 'text-emerald-600',
+      gradient: 'from-emerald-500 to-emerald-600',
+      statType: 'completed_today',
     },
   ] : [];
 
+  const calculateAge = (dob: string) => {
+    const birthDate = new Date(dob);
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    return age;
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Reception Dashboard</h1>
-        <p className="text-muted-foreground">Manage patient check-ins and registrations</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">Reception Dashboard</h1>
+          <p className="text-muted-foreground mt-1">Welcome back! Manage patient check-ins and registrations</p>
+        </div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Clock className="h-4 w-4" />
+          {new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+        </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="grid gap-4 md:grid-cols-3">
-        {quickActions.map((action) => (
-          <Card key={action.href} className="hover:shadow-md transition-shadow">
-            <CardHeader className="pb-3">
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${action.color}`}>
-                <action.icon className="h-5 w-5" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <CardTitle className="text-base mb-1">{action.title}</CardTitle>
-              <CardDescription className="mb-4">{action.description}</CardDescription>
-              <Button asChild variant="ghost" className="p-0 h-auto">
-                <Link href={action.href} className="flex items-center gap-1 text-primary">
-                  Go to {action.title.toLowerCase()}
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
+      {/* Stats Overview - Now Clickable Buttons */}
+      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+        {statCards.map((stat) => (
+          <button
+            key={stat.title}
+            onClick={() => handleStatClick(stat.statType)}
+            className="text-left"
+          >
+            <Card className="overflow-hidden border-0 shadow-md hover:shadow-xl transition-all duration-300 hover:scale-105 cursor-pointer group">
+              <div className={`h-1.5 bg-gradient-to-r ${stat.gradient}`} />
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-3xl font-bold group-hover:text-primary transition-colors">{stat.value}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{stat.title}</p>
+                  </div>
+                  <div className={`p-2 rounded-lg bg-gradient-to-br ${stat.gradient} text-white group-hover:scale-110 transition-transform`}>
+                    <stat.icon className="h-4 w-4" />
+                  </div>
+                </div>
+                {stat.trend && (
+                  <div className="flex items-center gap-1 mt-2 text-xs text-emerald-600">
+                    <TrendingUp className="h-3 w-3" />
+                    {stat.trend} from last week
+                  </div>
+                )}
+                <div className="flex items-center gap-1 mt-2 text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Eye className="h-3 w-3" />
+                  Click to view details
+                </div>
+              </CardContent>
+            </Card>
+          </button>
         ))}
       </div>
 
-      {/* Stats */}
+      {/* Quick Actions */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">Today&apos;s Overview</h2>
-        <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
-          {statCards.map((stat) => (
-            <Card key={stat.title}>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <stat.icon className={`h-8 w-8 ${stat.color}`} />
-                  <div>
-                    <p className="text-2xl font-bold">{stat.value}</p>
-                    <p className="text-xs text-muted-foreground">{stat.title}</p>
-                  </div>
+        <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {quickActions.map((action) => (
+            <Card 
+              key={action.href} 
+              className={`group hover:shadow-lg transition-all duration-300 border-0 shadow-md bg-gradient-to-br ${action.gradient} overflow-hidden`}
+            >
+              <CardHeader className="pb-3">
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${action.iconBg} group-hover:scale-110 transition-transform duration-300`}>
+                  <action.icon className={`h-6 w-6 ${action.iconColor}`} />
                 </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-base mb-1 group-hover:text-primary transition-colors">{action.title}</CardTitle>
+                <CardDescription className="text-sm mb-4 line-clamp-2">{action.description}</CardDescription>
+                <Button asChild variant="ghost" className="p-0 h-auto group-hover:translate-x-1 transition-transform">
+<span 
+                    onClick={() => navigate(action.href)}
+                    className="flex items-center gap-1 text-primary font-medium cursor-pointer"
+                  >
+                    View <ArrowRight className="h-4 w-4" />
+                  </span>
+                </Button>
               </CardContent>
             </Card>
           ))}
         </div>
       </div>
 
-      {/* Recent Activity - Placeholder */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Check-ins</CardTitle>
-          <CardDescription>Patients checked in today</CardDescription>
+      {/* Recent Activity */}
+      <Card className="border-0 shadow-md">
+        <CardHeader className="border-b bg-muted/30">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-lg">Recent Check-ins</CardTitle>
+              <CardDescription>Patients checked in today</CardDescription>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <span onClick={() => navigate('/reception/queue')} className="cursor-pointer">View All</span>
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent>
-          {recentVisits.length > 0 ? (
-            <div className="space-y-3">
-              {recentVisits.map((visit: any) => (
-                <div
-                  key={visit.id}
-                  className="flex items-center justify-between p-3 rounded-lg border"
-                >
-                  <div>
-                    <p className="font-medium">{visit.patient?.full_name || 'Unknown'}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {visit.patient?.registration_number || ''} - Checked in at{' '}
-                      {visit.checkin_time
-                        ? new Date(visit.checkin_time).toLocaleTimeString()
-                        : 'N/A'}
-                    </p>
+        <CardContent className="p-0">
+          {stats && stats.todayVisits > 0 ? (
+            <div className="divide-y">
+              {store.getTodayVisits().slice(0, 5).map((visit) => {
+                const patient = store.getPatientById(visit.patient_id);
+                if (!patient) return null;
+                return (
+                  <div
+                    key={visit.id}
+                    className="flex items-center justify-between p-4 hover:bg-muted/30 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <span className="text-sm font-semibold text-primary">
+                          {patient.full_name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="font-medium">{patient.full_name}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {patient.registration_number} - Checked in at{' '}
+                          {visit.checkin_time
+                            ? new Date(visit.checkin_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+                            : 'N/A'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className={`text-sm px-3 py-1 rounded-full font-medium capitalize
+                      ${visit.current_stage === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                        visit.current_stage === 'counsellor' ? 'bg-amber-100 text-amber-700' :
+                        visit.current_stage === 'doctor' ? 'bg-indigo-100 text-indigo-700' :
+                        visit.current_stage === 'pharmacy' ? 'bg-rose-100 text-rose-700' :
+                        'bg-secondary text-secondary-foreground'
+                      }`}
+                    >
+                      {visit.current_stage}
+                    </span>
                   </div>
-                  <span className="text-sm px-2 py-1 rounded-full bg-secondary capitalize">
-                    {visit.current_stage}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
-            <p className="text-muted-foreground text-center py-8">
-              No check-ins yet today
-            </p>
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
+                <Users className="h-8 w-8 text-muted-foreground" />
+              </div>
+              <p className="text-muted-foreground font-medium">No check-ins yet today</p>
+              <p className="text-sm text-muted-foreground mt-1">Patients will appear here once they check in</p>
+              <Button asChild className="mt-4">
+                <span onClick={() => navigate('/reception/checkin')} className="cursor-pointer">Start Check-in</span>
+              </Button>
+            </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Stat Detail Sheet */}
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+          <SheetHeader className="border-b pb-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <SheetTitle className="text-xl">{selectedStat?.title}</SheetTitle>
+                <SheetDescription>{selectedStat?.description}</SheetDescription>
+              </div>
+              <Badge variant="secondary" className="text-lg px-3 py-1">
+                {selectedStat?.patients.length || 0}
+              </Badge>
+            </div>
+          </SheetHeader>
+
+          <div className="mt-6">
+            {selectedStat?.patients.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
+                  <Users className="h-8 w-8 text-muted-foreground" />
+                </div>
+                <p className="text-muted-foreground font-medium">No patients found</p>
+                <p className="text-sm text-muted-foreground mt-1">There are no patients in this category</p>
+              </div>
+            ) : (
+              <ScrollArea className="h-[calc(100vh-200px)]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>File No.</TableHead>
+                      <TableHead>Patient Name</TableHead>
+                      <TableHead>Age/Gender</TableHead>
+                      <TableHead>Phone</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {selectedStat?.patients.map(({ patient, visit }) => (
+                      <TableRow key={patient.id} className="hover:bg-muted/50">
+                        <TableCell className="font-medium text-primary">
+                          {patient.registration_number}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                              <span className="text-xs font-semibold text-primary">
+                                {patient.full_name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                              </span>
+                            </div>
+                            {patient.full_name}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {calculateAge(patient.date_of_birth)}y / {patient.gender === 'male' ? 'M' : patient.gender === 'female' ? 'F' : 'O'}
+                        </TableCell>
+                        <TableCell>{patient.phone}</TableCell>
+                        <TableCell>
+                          {visit ? (
+                            <Badge 
+                              variant="outline"
+                              className={`capitalize
+                                ${visit.current_stage === 'completed' ? 'border-emerald-500 text-emerald-700 bg-emerald-50' :
+                                  visit.current_stage === 'counsellor' ? 'border-amber-500 text-amber-700 bg-amber-50' :
+                                  visit.current_stage === 'doctor' ? 'border-indigo-500 text-indigo-700 bg-indigo-50' :
+                                  visit.current_stage === 'pharmacy' ? 'border-rose-500 text-rose-700 bg-rose-50' :
+                                  ''
+                                }`}
+                            >
+                              {visit.current_stage}
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className={`capitalize
+                              ${patient.status === 'active' ? 'border-emerald-500 text-emerald-700 bg-emerald-50' : 
+                                'border-gray-500 text-gray-700 bg-gray-50'}`}>
+                              {patient.status}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleViewPatient(patient)}
+                          >
+                            <Eye className="h-4 w-4 mr-1" />
+                            View
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </ScrollArea>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Patient Detail Sheet */}
+      <Sheet open={patientDetailOpen} onOpenChange={setPatientDetailOpen}>
+        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-primary" />
+              Patient Details
+            </SheetTitle>
+            <SheetDescription>
+              Complete information for {selectedPatient?.full_name}
+            </SheetDescription>
+          </SheetHeader>
+
+          {selectedPatient && (
+            <ScrollArea className="h-[calc(100vh-120px)] mt-6">
+              <div className="space-y-6 pr-4">
+                {/* Basic Info */}
+                <div className="flex items-center gap-4 p-4 bg-primary/5 rounded-lg">
+                  <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
+                    <span className="text-xl font-bold text-primary">
+                      {selectedPatient.full_name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                    </span>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold">{selectedPatient.full_name}</h3>
+                    <p className="text-primary font-medium">{selectedPatient.registration_number}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {calculateAge(selectedPatient.date_of_birth)} years, {selectedPatient.gender}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Contact Information */}
+                <div>
+                  <h4 className="font-semibold text-sm text-muted-foreground mb-3 uppercase tracking-wide">Contact Information</h4>
+                  <div className="grid gap-3">
+                    <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg">
+                      <Phone className="h-4 w-4 text-muted-foreground" />
+                      <div>
+                        <p className="text-sm text-muted-foreground">Phone</p>
+                        <p className="font-medium">{selectedPatient.phone}</p>
+                      </div>
+                    </div>
+                    {selectedPatient.email && (
+                      <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        <div>
+                          <p className="text-sm text-muted-foreground">Email</p>
+                          <p className="font-medium">{selectedPatient.email}</p>
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                      <MapPin className="h-4 w-4 text-muted-foreground mt-0.5" />
+                      <div>
+                        <p className="text-sm text-muted-foreground">Address</p>
+                        <p className="font-medium">
+                          {selectedPatient.address}, {selectedPatient.city}, {selectedPatient.state} - {selectedPatient.pincode}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Medical Information */}
+                <div>
+                  <h4 className="font-semibold text-sm text-muted-foreground mb-3 uppercase tracking-wide">Medical Information</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <p className="text-sm text-muted-foreground">Blood Group</p>
+                      <p className="font-medium">{selectedPatient.blood_group || 'Not specified'}</p>
+                    </div>
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <p className="text-sm text-muted-foreground">Addiction Type</p>
+                      <p className="font-medium capitalize">{selectedPatient.addiction_type}</p>
+                    </div>
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <p className="text-sm text-muted-foreground">Addiction Duration</p>
+                      <p className="font-medium">{selectedPatient.addiction_duration}</p>
+                    </div>
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <p className="text-sm text-muted-foreground">First Visit</p>
+                      <p className="font-medium">{new Date(selectedPatient.first_visit_date).toLocaleDateString('en-IN')}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Emergency Contact */}
+                <div>
+                  <h4 className="font-semibold text-sm text-muted-foreground mb-3 uppercase tracking-wide">Emergency Contact</h4>
+                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg">
+                    <p className="font-medium">{selectedPatient.emergency_contact_name}</p>
+                    <p className="text-sm text-muted-foreground">{selectedPatient.emergency_contact_relation}</p>
+                    <p className="text-sm font-medium text-rose-600 mt-1">{selectedPatient.emergency_contact_phone}</p>
+                  </div>
+                </div>
+
+                {/* Medical History */}
+                {(selectedPatient.medical_history || selectedPatient.allergies || selectedPatient.family_history) && (
+                  <div>
+                    <h4 className="font-semibold text-sm text-muted-foreground mb-3 uppercase tracking-wide">Medical History</h4>
+                    <div className="space-y-3">
+                      {selectedPatient.medical_history && (
+                        <div className="p-3 bg-muted/30 rounded-lg">
+                          <p className="text-sm text-muted-foreground">Medical History</p>
+                          <p className="font-medium">{selectedPatient.medical_history}</p>
+                        </div>
+                      )}
+                      {selectedPatient.allergies && (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                          <p className="text-sm text-amber-600">Allergies</p>
+                          <p className="font-medium text-amber-800">{selectedPatient.allergies}</p>
+                        </div>
+                      )}
+                      {selectedPatient.family_history && (
+                        <div className="p-3 bg-muted/30 rounded-lg">
+                          <p className="text-sm text-muted-foreground">Family History</p>
+                          <p className="font-medium">{selectedPatient.family_history}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex gap-3 pt-4 border-t">
+                  <Button asChild className="flex-1">
+                    <span onClick={() => navigate('/reception/patients')} className="cursor-pointer">
+                      Edit Patient
+                    </span>
+                  </Button>
+                  <Button variant="outline" onClick={() => setPatientDetailOpen(false)}>
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </ScrollArea>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

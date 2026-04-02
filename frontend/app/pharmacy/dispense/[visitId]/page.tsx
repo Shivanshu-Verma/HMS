@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { useRouter, useParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,8 +21,16 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { pharmacyApi } from '@/lib/api-client';
+import { store, generateId, generateInvoiceNumber } from '@/lib/demo-store';
 import { useAuth } from '@/lib/auth-context';
+import { useDemoData } from '@/lib/runtime-mode';
+import {
+  checkoutPharmacySession,
+  getPharmacySessionDetail,
+  submitPharmacyDispense,
+  type PharmacyCheckoutResponse,
+  type PharmacyPaymentMethod,
+} from '@/lib/hms-api';
 import type { Visit, Patient, Prescription, Medicine, Invoice, PaymentMethod, DoctorConsultation } from '@/lib/types';
 import { PatientCard } from '@/components/patient-card';
 import { toast } from 'sonner';
@@ -36,20 +43,30 @@ import {
   Loader2,
   Check,
 } from 'lucide-react';
-import Link from 'next/link';
+import { navigate } from '@/lib/navigation';
 
 interface PrescriptionWithMedicine extends Prescription {
   medicine?: Medicine;
   selected: boolean;
 }
 
-const CONSULTATION_FEE = 500;
+interface CheckoutReceipt {
+  invoice_number: string;
+  invoice_date: string;
+  payment_method: PharmacyPaymentMethod;
+  medicines_total: number;
+  total_charged: number;
+  cash_amount: number;
+  online_amount: number;
+  new_debt: number;
+  debt_before: number;
+  debt_after: number;
+}
 
-export default function DispensePage() {
-  const router = useRouter();
-  const params = useParams();
-  const { user } = useAuth();
-  const visitId = params.visitId as string;
+export default function DispensePage({ params }: { params: Promise<{ visitId: string }> }) {
+  const [visitId, setVisitId] = useState<string>('');
+  const [isMounted, setIsMounted] = useState(false);
+  const { user, accessToken } = useAuth();
   const printRef = useRef<HTMLDivElement>(null);
 
   const [visit, setVisit] = useState<Visit | null>(null);
@@ -59,69 +76,109 @@ export default function DispensePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showInvoice, setShowInvoice] = useState(false);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
+  const [checkoutReceipt, setCheckoutReceipt] = useState<CheckoutReceipt | null>(null);
+  const [outstandingDebt, setOutstandingDebt] = useState(0);
+  const [splitCashAmount, setSplitCashAmount] = useState(0);
 
   const [discount, setDiscount] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<PharmacyPaymentMethod>('cash');
+
+  // Get params safely after mount
+  useEffect(() => {
+    setIsMounted(true);
+    params.then((p) => setVisitId(p.visitId));
+  }, [params]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const result = await pharmacyApi.getDispenseDetail(visitId);
-        if (result.success && result.data) {
-          const v = result.data;
-          setVisit({
-            id: v.id,
-            patient_id: v.patient_id,
-            visit_date: v.visit_date?.split('T')[0] || '',
-            visit_number: v.visit_number,
-            current_stage: v.current_stage,
-            checkin_time: v.checkin_time,
-            status: v.status,
-          });
-          if (v.patient) {
-            setPatient(v.patient as any);
-          }
-          if (v.doctor_stage) {
-            setConsultation({
-              id: v.id,
-              visit_id: v.id,
-              patient_id: v.patient_id,
-              doctor_id: '',
-              diagnosis: v.doctor_stage.diagnosis,
-              treatment_plan: v.doctor_stage.treatment_plan,
-              clinical_notes: v.doctor_stage.clinical_notes,
-              created_at: v.doctor_stage.completed_at || '',
-            });
-          }
-          const rxData = (v.doctor_stage?.prescriptions || []).map((p: any) => ({
-            id: p.id || p.medicine_id,
-            consultation_id: '',
-            visit_id: v.id,
-            patient_id: v.patient_id,
-            medicine_id: p.medicine_id,
-            quantity: p.quantity,
-            dosage: p.dosage,
-            frequency: p.frequency,
-            duration_days: p.duration_days,
-            instructions: p.instructions || '',
-            dispensed: false,
-            medicine: {
-              id: p.medicine_id,
-              name: p.medicine_name || 'Unknown',
-              unit: p.medicine_unit || 'tablet',
-              price_per_unit: p.price_per_unit || 0,
-              stock_quantity: p.stock_quantity || 0,
-            } as any,
-            selected: true,
-          }));
-          setPrescriptions(rxData);
+    if (!visitId) return;
+    if (useDemoData || !accessToken) {
+      const visitData = store.getVisitById(visitId);
+      if (visitData) {
+        setVisit(visitData);
+        const patientData = store.getPatientById(visitData.patient_id);
+        if (patientData) {
+          setPatient(patientData);
         }
-      } catch (err) {
-        console.error('Failed to load dispense details:', err);
+        const consultationData = store.getConsultationByVisit(visitId);
+        if (consultationData) {
+          setConsultation(consultationData);
+        }
+
+        const prescriptionData = store.getPrescriptionsByVisit(visitId).map((p) => ({
+          ...p,
+          medicine: store.getMedicineById(p.medicine_id),
+          selected: true,
+        }));
+        setPrescriptions(prescriptionData);
       }
-    };
-    fetchData();
-  }, [visitId]);
+      return;
+    }
+
+    getPharmacySessionDetail(accessToken, visitId)
+      .then((session) => {
+        setOutstandingDebt(session.outstanding_debt || 0);
+        setVisit({
+          id: session.session_id,
+          patient_id: session.patient.patient_id,
+          visit_date: new Date().toISOString().split('T')[0],
+          visit_number: 1,
+          current_stage: 'pharmacy',
+          status: 'in_progress',
+        });
+
+        setPatient({
+          id: session.patient.patient_id,
+          registration_number: session.patient.registration_number,
+          patient_category: 'deaddiction',
+          full_name: session.patient.full_name,
+          date_of_birth: session.patient.date_of_birth,
+          gender: session.patient.sex,
+          phone: session.patient.phone_number,
+          address: '',
+          city: '',
+          state: '',
+          pincode: '',
+          addiction_type: 'other',
+          first_visit_date: new Date().toISOString().split('T')[0],
+          emergency_contact_name: '',
+          emergency_contact_phone: '',
+          emergency_contact_relation: '',
+          status: 'active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+
+        setConsultation(null);
+
+        const dispenseRows: PrescriptionWithMedicine[] = session.dispense_items.map((item, index) => ({
+          id: `session-item-${index}`,
+          consultation_id: '',
+          visit_id: session.session_id,
+          patient_id: session.patient.patient_id,
+          medicine_id: item.medicine_id,
+          quantity: item.quantity,
+          dosage: '-',
+          frequency: 'as_needed',
+          duration_days: 1,
+          dispensed: false,
+          selected: true,
+          medicine: {
+            id: item.medicine_id,
+            name: item.medicine_name,
+            unit: 'tablet',
+            price_per_unit: item.unit_price,
+            stock_quantity: 0,
+            reorder_level: 0,
+            is_active: true,
+            created_at: new Date().toISOString(),
+          },
+        }));
+        setPrescriptions(dispenseRows);
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : 'Failed to load session details');
+      });
+  }, [visitId, accessToken]);
 
   const togglePrescription = (index: number) => {
     const updated = [...prescriptions];
@@ -136,19 +193,35 @@ export default function DispensePage() {
       return sum + price * p.quantity;
     }, 0);
 
-    const subtotal = CONSULTATION_FEE + medicineTotal;
-    const discountAmount = (subtotal * discount) / 100;
-    const afterDiscount = subtotal - discountAmount;
-    const tax = afterDiscount * 0.05; // 5% GST
-    const grandTotal = afterDiscount + tax;
+    if (useDemoData || !accessToken) {
+      const consultationFee = 500;
+      const subtotal = consultationFee + medicineTotal;
+      const discountAmount = (subtotal * discount) / 100;
+      const afterDiscount = subtotal - discountAmount;
+      const tax = afterDiscount * 0.05;
+      const grandTotal = afterDiscount + tax;
+
+      return {
+        consultationFee,
+        medicineTotal,
+        subtotal,
+        discountAmount,
+        tax,
+        grandTotal,
+        totalDue: grandTotal,
+      };
+    }
+
+    const totalDue = medicineTotal + outstandingDebt;
 
     return {
-      consultationFee: CONSULTATION_FEE,
+      consultationFee: 0,
       medicineTotal,
-      subtotal,
-      discountAmount,
-      tax,
-      grandTotal,
+      subtotal: medicineTotal,
+      discountAmount: 0,
+      tax: 0,
+      grandTotal: totalDue,
+      totalDue,
     };
   };
 
@@ -163,48 +236,126 @@ export default function DispensePage() {
 
     setIsSubmitting(true);
 
-    try {
-      // Dispense via API
-      const dispenseItems = prescriptions
-        .filter((p) => p.selected)
-        .map((p) => ({
-          medicine_id: p.medicine_id,
-          quantity_dispensed: p.quantity,
-          selected: true,
-        }));
+    if (!useDemoData && accessToken) {
+      try {
+        const dispensePayload = {
+          items: selectedPrescriptions.map((p) => ({
+            medicine_id: p.medicine_id,
+            quantity: p.quantity,
+            unit_price: p.medicine?.price_per_unit || 0,
+          })),
+        };
 
-      await pharmacyApi.dispense(visitId, {
-        items: dispenseItems,
-        dispensing_notes: '',
-      });
+        const dispenseResult = await submitPharmacyDispense(accessToken, visit.id, dispensePayload);
+        const totalDue = (dispenseResult.medicines_total || 0) + outstandingDebt;
 
-      // Close visit
-      await pharmacyApi.closeVisit(visitId);
+        let cashAmount = 0;
+        let onlineAmount = 0;
+        let newDebt = 0;
+        let debtCleared = 0;
 
-      const totals = calculateTotals();
-      setInvoice({
-        id: visitId,
-        visit_id: visitId,
-        patient_id: patient.id,
-        invoice_number: `INV-${Date.now()}`,
-        invoice_date: new Date().toISOString().split('T')[0],
-        consultation_fee: totals.consultationFee,
-        medicine_total: totals.medicineTotal,
-        discount: totals.discountAmount,
-        tax: totals.tax,
-        grand_total: totals.grandTotal,
-        payment_status: 'paid',
-        payment_method: paymentMethod,
-        created_at: new Date().toISOString(),
-      });
+        if (paymentMethod === 'cash') {
+          cashAmount = totalDue;
+          debtCleared = outstandingDebt;
+        } else if (paymentMethod === 'online') {
+          onlineAmount = totalDue;
+          debtCleared = outstandingDebt;
+        } else if (paymentMethod === 'split') {
+          const splitCash = Math.min(Math.max(splitCashAmount || 0, 0), totalDue);
+          cashAmount = splitCash;
+          onlineAmount = totalDue - splitCash;
+          debtCleared = outstandingDebt;
+        } else {
+          newDebt = totalDue;
+        }
 
-      setIsSubmitting(false);
-      setShowInvoice(true);
-      toast.success('Medicines dispensed! Visit completed.');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to dispense');
-      setIsSubmitting(false);
+        const checkoutResult: PharmacyCheckoutResponse = await checkoutPharmacySession(accessToken, visit.id, {
+          method: paymentMethod,
+          cash_amount: cashAmount,
+          online_amount: onlineAmount,
+          debt_cleared: debtCleared,
+          new_debt: newDebt,
+        });
+
+        const invoiceNo = `INV-${checkoutResult.visit_id.slice(-8).toUpperCase()}`;
+        setCheckoutReceipt({
+          invoice_number: invoiceNo,
+          invoice_date: checkoutResult.visit_date,
+          payment_method: checkoutResult.payment.method,
+          medicines_total: checkoutResult.medicines_total,
+          total_charged: checkoutResult.payment.total_charged,
+          cash_amount: checkoutResult.payment.cash_amount,
+          online_amount: checkoutResult.payment.online_amount,
+          new_debt: checkoutResult.payment.new_debt,
+          debt_before: checkoutResult.debt_snapshot.debt_before,
+          debt_after: checkoutResult.debt_snapshot.debt_after,
+        });
+        setShowInvoice(true);
+        toast.success('Dispense and checkout completed successfully.');
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Checkout failed');
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
     }
+
+    const totals = calculateTotals();
+
+    // Create invoice
+    const newInvoice: Invoice = {
+      id: generateId(),
+      visit_id: visit.id,
+      patient_id: patient.id,
+      invoice_number: generateInvoiceNumber(),
+      invoice_date: new Date().toISOString().split('T')[0],
+      consultation_fee: totals.consultationFee,
+      medicine_total: totals.medicineTotal,
+      discount: totals.discountAmount,
+      tax: totals.tax,
+      grand_total: totals.grandTotal,
+      payment_status: 'paid',
+      payment_method: paymentMethod,
+      created_at: new Date().toISOString(),
+    };
+
+    store.addInvoice(newInvoice);
+    setInvoice(newInvoice);
+
+    // Mark prescriptions as dispensed and update inventory
+    selectedPrescriptions.forEach((p) => {
+      store.updatePrescription(p.id, {
+        dispensed: true,
+        dispensed_at: new Date().toISOString(),
+      });
+
+      // Deduct from inventory
+      if (p.medicine) {
+        store.addInventoryTransaction({
+          id: generateId(),
+          medicine_id: p.medicine_id,
+          transaction_type: 'out',
+          quantity: p.quantity,
+          reference_id: p.id,
+          performed_by: user.id,
+          notes: `Dispensed for patient ${patient.full_name}`,
+          created_at: new Date().toISOString(),
+        });
+      }
+    });
+
+    // Update visit to completed
+    store.updateVisit(visit.id, {
+      current_stage: 'completed',
+      pharmacy_time: new Date().toISOString(),
+      completed_time: new Date().toISOString(),
+      pharmacist_id: user.id,
+      status: 'completed',
+    });
+
+    setIsSubmitting(false);
+    setShowInvoice(true);
+    toast.success('Medicines dispensed! Invoice generated.');
   };
 
   const handlePrint = () => {
@@ -214,10 +365,12 @@ export default function DispensePage() {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
+    const invoiceNumber = checkoutReceipt?.invoice_number || invoice?.invoice_number;
+
     printWindow.document.write(`
       <html>
         <head>
-          <title>Invoice - ${invoice?.invoice_number}</title>
+          <title>Invoice - ${invoiceNumber || '-'}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; }
             .header { text-align: center; margin-bottom: 20px; }
@@ -247,19 +400,21 @@ export default function DispensePage() {
   const totals = calculateTotals();
 
   // Invoice View
-  if (showInvoice && invoice) {
+  if (showInvoice && (invoice || checkoutReceipt)) {
+    const invoiceNumber = checkoutReceipt?.invoice_number || invoice?.invoice_number || '-';
+    const invoiceDate = checkoutReceipt?.invoice_date || invoice?.invoice_date || new Date().toISOString();
+    const paymentLabel = (checkoutReceipt?.payment_method || invoice?.payment_method || 'cash').toUpperCase();
+
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" asChild>
-              <Link href="/pharmacy">
-                <ArrowLeft className="h-4 w-4" />
-              </Link>
-            </Button>
+<Button variant="ghost" size="icon" onClick={() => navigate('/pharmacy')}>
+                    <ArrowLeft className="h-4 w-4" />
+                </Button>
             <div>
               <h1 className="text-2xl font-bold text-foreground">Invoice Generated</h1>
-              <p className="text-muted-foreground">Invoice #{invoice.invoice_number}</p>
+              <p className="text-muted-foreground">Invoice #{invoiceNumber}</p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -267,12 +422,10 @@ export default function DispensePage() {
               <Printer className="h-4 w-4 mr-2" />
               Print Invoice
             </Button>
-            <Button asChild>
-              <Link href="/pharmacy">
-                <Check className="h-4 w-4 mr-2" />
-                Done
-              </Link>
-            </Button>
+<Button onClick={() => navigate('/pharmacy')}>
+                      <Check className="h-4 w-4 mr-2" />
+                      Done
+                  </Button>
           </div>
         </div>
 
@@ -291,9 +444,9 @@ export default function DispensePage() {
                 <p><strong>Phone:</strong> {patient.phone}</p>
               </div>
               <div className="text-right">
-                <p><strong>Invoice No:</strong> {invoice.invoice_number}</p>
-                <p><strong>Date:</strong> {new Date(invoice.invoice_date).toLocaleDateString()}</p>
-                <p><strong>Payment:</strong> {invoice.payment_method?.toUpperCase()}</p>
+                <p><strong>Invoice No:</strong> {invoiceNumber}</p>
+                <p><strong>Date:</strong> {new Date(invoiceDate).toLocaleDateString()}</p>
+                <p><strong>Payment:</strong> {paymentLabel}</p>
               </div>
             </div>
 
@@ -307,12 +460,6 @@ export default function DispensePage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                <TableRow>
-                  <TableCell>Consultation Fee</TableCell>
-                  <TableCell className="text-right">1</TableCell>
-                  <TableCell className="text-right">Rs. {CONSULTATION_FEE.toFixed(2)}</TableCell>
-                  <TableCell className="text-right">Rs. {CONSULTATION_FEE.toFixed(2)}</TableCell>
-                </TableRow>
                 {prescriptions
                   .filter((p) => p.selected)
                   .map((p) => (
@@ -331,14 +478,23 @@ export default function DispensePage() {
             </Table>
 
             <div className="mt-4 space-y-1 text-right text-sm">
-              <p>Subtotal: Rs. {totals.subtotal.toFixed(2)}</p>
-              {totals.discountAmount > 0 && (
+              <p>Medicine Total: Rs. {(checkoutReceipt?.medicines_total ?? totals.medicineTotal).toFixed(2)}</p>
+              {useDemoData && totals.discountAmount > 0 && (
                 <p>Discount ({discount}%): -Rs. {totals.discountAmount.toFixed(2)}</p>
               )}
-              <p>GST (5%): Rs. {totals.tax.toFixed(2)}</p>
+              {useDemoData && <p>GST (5%): Rs. {totals.tax.toFixed(2)}</p>}
+              {!useDemoData && (
+                <>
+                  <p>Outstanding Debt Before: Rs. {(checkoutReceipt?.debt_before ?? outstandingDebt).toFixed(2)}</p>
+                  <p>Paid in Cash: Rs. {(checkoutReceipt?.cash_amount ?? 0).toFixed(2)}</p>
+                  <p>Paid Online: Rs. {(checkoutReceipt?.online_amount ?? 0).toFixed(2)}</p>
+                  <p>New Debt Added: Rs. {(checkoutReceipt?.new_debt ?? 0).toFixed(2)}</p>
+                </>
+              )}
               <p className="text-lg font-bold pt-2 border-t">
-                Grand Total: Rs. {totals.grandTotal.toFixed(2)}
+                Grand Total: Rs. {(checkoutReceipt?.total_charged ?? totals.grandTotal).toFixed(2)}
               </p>
+              {!useDemoData && <p>Outstanding Debt After: Rs. {(checkoutReceipt?.debt_after ?? outstandingDebt).toFixed(2)}</p>}
             </div>
 
             <div className="mt-6 pt-4 border-t text-center text-sm text-muted-foreground">
@@ -354,11 +510,9 @@ export default function DispensePage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild>
-          <Link href="/pharmacy/queue">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
+<Button variant="ghost" size="icon" onClick={() => navigate('/pharmacy/queue')}>
+                    <ArrowLeft className="h-4 w-4" />
+                </Button>
         <div>
           <h1 className="text-2xl font-bold text-foreground">Dispense Medicines</h1>
           <p className="text-muted-foreground">Dispense for {patient.full_name}</p>
@@ -438,64 +592,96 @@ export default function DispensePage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="discount">Discount (%)</Label>
-                  <Input
-                    id="discount"
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={discount}
-                    onChange={(e) => setDiscount(parseInt(e.target.value) || 0)}
-                    placeholder="0"
-                  />
-                </div>
+                {(useDemoData || !accessToken) && (
+                  <div>
+                    <Label htmlFor="discount">Discount (%)</Label>
+                    <Input
+                      id="discount"
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={discount}
+                      onChange={(e) => setDiscount(parseInt(e.target.value) || 0)}
+                      placeholder="0"
+                    />
+                  </div>
+                )}
                 <div>
                   <Label htmlFor="payment">Payment Method</Label>
                   <Select
                     value={paymentMethod}
-                    onValueChange={(v) => setPaymentMethod(v as PaymentMethod)}
+                    onValueChange={(v) => setPaymentMethod(v as PharmacyPaymentMethod)}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="cash">Cash</SelectItem>
-                      <SelectItem value="card">Card</SelectItem>
-                      <SelectItem value="upi">UPI</SelectItem>
-                      <SelectItem value="insurance">Insurance</SelectItem>
+                      <SelectItem value="online">Online</SelectItem>
+                      <SelectItem value="split">Split</SelectItem>
+                      <SelectItem value="debt">Debt</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
               </div>
 
+              {!useDemoData && paymentMethod === 'split' && (
+                <div>
+                  <Label htmlFor="splitCashAmount">Cash Amount (for split payment)</Label>
+                  <Input
+                    id="splitCashAmount"
+                    type="number"
+                    min={0}
+                    max={totals.totalDue}
+                    value={splitCashAmount}
+                    onChange={(e) => setSplitCashAmount(parseFloat(e.target.value) || 0)}
+                    placeholder="Enter cash amount"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Remaining amount will be paid online.
+                  </p>
+                </div>
+              )}
+
               {/* Totals */}
               <div className="pt-4 border-t space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span>Consultation Fee</span>
-                  <span>Rs. {totals.consultationFee.toFixed(2)}</span>
-                </div>
+                {(useDemoData || !accessToken) && (
+                  <div className="flex justify-between">
+                    <span>Consultation Fee</span>
+                    <span>Rs. {totals.consultationFee.toFixed(2)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span>Medicine Total</span>
                   <span>Rs. {totals.medicineTotal.toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span>Subtotal</span>
-                  <span>Rs. {totals.subtotal.toFixed(2)}</span>
-                </div>
-                {totals.discountAmount > 0 && (
+                {(useDemoData || !accessToken) && (
+                  <div className="flex justify-between">
+                    <span>Subtotal</span>
+                    <span>Rs. {totals.subtotal.toFixed(2)}</span>
+                  </div>
+                )}
+                {(useDemoData || !accessToken) && totals.discountAmount > 0 && (
                   <div className="flex justify-between text-emerald-600">
                     <span>Discount ({discount}%)</span>
                     <span>-Rs. {totals.discountAmount.toFixed(2)}</span>
                   </div>
                 )}
-                <div className="flex justify-between">
-                  <span>GST (5%)</span>
-                  <span>Rs. {totals.tax.toFixed(2)}</span>
-                </div>
+                {(useDemoData || !accessToken) && (
+                  <div className="flex justify-between">
+                    <span>GST (5%)</span>
+                    <span>Rs. {totals.tax.toFixed(2)}</span>
+                  </div>
+                )}
+                {!useDemoData && (
+                  <div className="flex justify-between">
+                    <span>Outstanding Debt</span>
+                    <span>Rs. {outstandingDebt.toFixed(2)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-lg font-bold pt-2 border-t">
-                  <span>Grand Total</span>
-                  <span>Rs. {totals.grandTotal.toFixed(2)}</span>
+                  <span>{useDemoData || !accessToken ? 'Grand Total' : 'Total Due'}</span>
+                  <span>Rs. {(useDemoData || !accessToken ? totals.grandTotal : totals.totalDue).toFixed(2)}</span>
                 </div>
               </div>
             </CardContent>
@@ -503,9 +689,9 @@ export default function DispensePage() {
 
           {/* Submit */}
           <div className="flex justify-end gap-4">
-            <Button variant="outline" asChild>
-              <Link href="/pharmacy/queue">Cancel</Link>
-            </Button>
+<Button variant="outline" onClick={() => navigate('/pharmacy/queue')}>
+                      Cancel
+                    </Button>
             <Button onClick={handleDispense} disabled={isSubmitting}>
               {isSubmitting ? (
                 <>

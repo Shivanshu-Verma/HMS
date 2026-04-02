@@ -62,7 +62,7 @@ def serialize_medicine(med_doc) -> dict:
         'category': med_doc.category,
         'manufacturer': med_doc.manufacturer,
         'unit': med_doc.unit,
-        'price_per_unit': med_doc.price_per_unit,
+        'price_per_unit': getattr(med_doc, 'unit_price', None),
         'stock_quantity': med_doc.stock_quantity,
         'reorder_level': med_doc.reorder_level,
         'expiry_date': med_doc.expiry_date.isoformat() if med_doc.expiry_date else None,

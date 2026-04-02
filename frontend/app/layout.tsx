@@ -8,30 +8,17 @@ import './globals.css'
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: 'De-Addiction Center Management System',
-  description: 'Comprehensive patient flow management for de-addiction centers',
+  title: 'Aggarwal Psychiatric & De-Addiction Centre',
+  description: 'Comprehensive patient management system for Aggarwal Psychiatric and De-Addiction Centre',
   generator: 'v0.app',
   icons: {
-    icon: [
-      {
-        url: '/icon-light-32x32.png',
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        url: '/icon-dark-32x32.png',
-        media: '(prefers-color-scheme: dark)',
-      },
-      {
-        url: '/icon.svg',
-        type: 'image/svg+xml',
-      },
-    ],
-    apple: '/apple-icon.png',
+    icon: '/logo.png',
+    apple: '/logo.png',
   },
 }
 
 export const viewport: Viewport = {
-  themeColor: '#0066CC',
+  themeColor: '#0d7377',
 }
 
 export default function RootLayout({

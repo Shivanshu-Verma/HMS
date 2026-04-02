@@ -1,45 +1,67 @@
-"""
-Serializers for pharmacy endpoints.
-
-Handles input validation for dispensing, stock management, and medicine creation.
-"""
+"""Input serializers for pharmacy endpoints."""
 from rest_framework import serializers
 
 
-class DispenseItemSerializer(serializers.Serializer):
-    """Validates a single dispense item."""
+class DispenseItemInputSerializer(serializers.Serializer):
+    """Single medicine row submitted by pharmacist during dispense stage."""
 
     medicine_id = serializers.CharField(required=True)
-    quantity_dispensed = serializers.IntegerField(required=True, min_value=0)
-    selected = serializers.BooleanField(required=False, default=True)
+    quantity = serializers.IntegerField(required=True, min_value=1)
+    unit_price = serializers.FloatField(required=True, min_value=0.0)
 
 
-class DispenseSerializer(serializers.Serializer):
-    """Validates the dispense submission."""
+class DispenseSubmitSerializer(serializers.Serializer):
+    """Payload for storing dispense items on an active session."""
 
-    items = DispenseItemSerializer(many=True, required=True)
-    dispensing_notes = serializers.CharField(required=False, allow_blank=True)
+    items = DispenseItemInputSerializer(many=True, required=True)
+
+
+class CheckoutPaymentSerializer(serializers.Serializer):
+    """Payment payload used by checkout endpoint."""
+
+    method = serializers.ChoiceField(choices=['cash', 'online', 'split', 'debt'])
+    cash_amount = serializers.FloatField(required=False, default=0.0, min_value=0.0)
+    online_amount = serializers.FloatField(required=False, default=0.0, min_value=0.0)
+    debt_cleared = serializers.FloatField(required=False, default=0.0, min_value=0.0)
+    new_debt = serializers.FloatField(required=False, default=0.0, min_value=0.0)
+
+
+class CheckoutSerializer(serializers.Serializer):
+    """Checkout payload including nested payment object."""
+
+    payment = CheckoutPaymentSerializer(required=True)
+
+
+class DebtPaymentSerializer(serializers.Serializer):
+    """Payload for standalone debt settlement without active check-in."""
+
+    patient_id = serializers.CharField(required=True)
+    payment = serializers.DictField(required=True)
+
+
+class MedicineCreateSerializer(serializers.Serializer):
+    """Payload for creating a medicine entry."""
+
+    name = serializers.CharField(required=True)
+    category = serializers.CharField(required=True)
+    unit = serializers.CharField(required=True)
+    unit_price = serializers.FloatField(required=True, min_value=0.0)
+    stock_quantity = serializers.IntegerField(required=True, min_value=0)
+    description = serializers.CharField(required=False, allow_blank=True)
+
+
+class MedicineUpdateSerializer(serializers.Serializer):
+    """Payload for patching mutable medicine attributes."""
+
+    name = serializers.CharField(required=False)
+    category = serializers.CharField(required=False)
+    unit = serializers.CharField(required=False)
+    unit_price = serializers.FloatField(required=False, min_value=0.0)
+    description = serializers.CharField(required=False, allow_blank=True)
+    is_active = serializers.BooleanField(required=False)
 
 
 class AddStockSerializer(serializers.Serializer):
-    """Validates stock addition input."""
+    """Payload for stock increment endpoint."""
 
-    quantity = serializers.IntegerField(required=True, min_value=1)
-    notes = serializers.CharField(required=False, allow_blank=True)
-
-
-class AddMedicineSerializer(serializers.Serializer):
-    """Validates new medicine creation input."""
-
-    name = serializers.CharField(required=True)
-    generic_name = serializers.CharField(required=False, allow_blank=True)
-    category = serializers.CharField(required=False, allow_blank=True)
-    manufacturer = serializers.CharField(required=False, allow_blank=True)
-    unit = serializers.ChoiceField(
-        choices=['tablet', 'capsule', 'ml', 'mg', 'syrup', 'injection'],
-        required=True,
-    )
-    price_per_unit = serializers.FloatField(required=True, min_value=0)
-    stock_quantity = serializers.IntegerField(required=False, default=0, min_value=0)
-    reorder_level = serializers.IntegerField(required=False, default=50, min_value=0)
-    expiry_date = serializers.DateField(required=False, allow_null=True)
+    quantity_to_add = serializers.IntegerField(required=True, min_value=1)

@@ -1,285 +1,182 @@
-# HMS Implementation Summary
+# HMS Backend Re-Integration Summary
 
 ## Overview
+This implementation realigns the Django + MongoEngine backend with the redesigned HMS workflow:
+- Tiered patient registration and general-data completion tracking
+- Counsellor follow-up and status-action workflow
+- Receptionist check-in and reports workflow
+- Pharmacist-led dispense, checkout, debt, and inventory workflow
+- Debt-aware visit archival transaction
 
-Implemented a Django 4.2 + Django REST Framework backend using MongoEngine with a two-database design:
+## Architecture Notes
+- MongoDB remains the only persistence backend for archive and active data.
+- No task queue, caching layer, invoice generation, or notifications were introduced.
+- Follow-up threshold is centrally defined as `FOLLOWUP_THRESHOLD_DAYS = 30` in settings.
+- Doctor module endpoints remain present in the codebase but are now dormant from the active frontend contract.
 
-- `hms_archive` for long-lived records (patients, visits, staff, medicines, inventory ledger, refresh tokens)
-- `hms_active` for in-progress workflow state (active sessions, locks, blacklist)
+## API Endpoints (Current)
 
-The Next.js frontend has been wired to the backend through a centralized API client using `NEXT_PUBLIC_API_URL`, JWT bearer auth, token refresh, and automatic logout-on-401 handling.
+### Patients
+- `POST /api/v1/patients/register/`
+- `GET /api/v1/patients/lookup/`
+- `GET /api/v1/patients/{patient_id}/`
+- `PATCH /api/v1/patients/{patient_id}/general/`
 
-## Repository Structure
+### Sessions
+- `POST /api/v1/sessions/checkin/`
 
-```text
-hms_backend/
-  .env.example                       # Backend environment variable template
-  .gitignore                         # Python/Django ignore rules
-  manage.py                          # Django entrypoint
-  requirements.txt                   # Pinned backend dependencies
-  config/
-    settings.py                      # Django + DRF + MongoEngine config
-    urls.py                          # Root API router under /api/v1/
-    wsgi.py                          # WSGI app
-  utils/
-    db.py                            # MongoEngine dual-connection setup
-    exceptions.py                    # Standardized error envelope handler
-    fingerprint.py                   # SHA-256 fingerprint hashing helper
-    pagination.py                    # Shared page/pageSize pagination helpers
-    response.py                      # Standardized success/paginated responses
-  apps/
-    auth_app/
-      serializers.py                 # Auth request validation
-      permissions.py                 # JWT auth + role permissions
-      urls.py                        # /auth/login, /auth/refresh, /auth/logout
-      views.py                       # Login/refresh/logout handlers
-      management/commands/seed_db.py # Idempotent seed command
-    patients/
-      models.py                      # Patient/Visit/Staff/Medicine/etc documents
-      serializers.py                 # Patient and visit serializers
-      urls.py                        # Patient/visit record endpoints
-      views.py                       # Registration, lookup, history, detail
-    receptionist/
-      serializers.py                 # Check-in/assignment serializers
-      urls.py                        # Visit create/active/assign-counsellor routes
-      views.py                       # Check-in queue and counsellor reassignment
-    consultant/
-      serializers.py                 # Consultant payload validators
-      urls.py                        # Consultant routes
-      views.py                       # Queue/context/notes/assign/history
-    doctor/
-      serializers.py                 # Findings/prescription validators
-      urls.py                        # Doctor routes + medicine search
-      views.py                       # Queue/context/findings/prescriptions/history
-    pharmacy/
-      serializers.py                 # Dispense/stock/medicine validators
-      urls.py                        # Pharmacy routes
-      views.py                       # Queue/dispense/inventory/history/close
-    sessions/
-      models.py                      # Active session/lock/blacklist documents
-      archive_service.py             # Atomic archive flow
-      urls.py                        # Placeholder include (no standalone routes)
+### Counsellor
+- `GET /api/v1/counsellor/followup/`
+- `PATCH /api/v1/counsellor/patients/{patient_id}/status/`
+- `GET /api/v1/counsellor/reports/`
 
-lib/
-  api-client.ts                      # Frontend API client and endpoint wrappers
-  auth-context.tsx                   # Frontend login/logout/token-backed auth state
+### Receptionist
+- `GET /api/v1/receptionist/reports/`
 
-app/
-  reception/register/page.tsx        # Uses backend patient registration API
-  pharmacy/inventory/page.tsx        # Uses backend inventory APIs
+### Pharmacy
+- `GET /api/v1/pharmacy/queue/`
+- `GET /api/v1/pharmacy/session/{session_id}/`
+- `GET /api/v1/pharmacy/medicines/search/`
+- `POST /api/v1/pharmacy/session/{session_id}/dispense/`
+- `POST /api/v1/pharmacy/session/{session_id}/checkout/`
+- `POST /api/v1/pharmacy/debt-payment/`
+- `GET /api/v1/pharmacy/inventory/`
+- `POST /api/v1/pharmacy/inventory/`
+- `PATCH /api/v1/pharmacy/inventory/{medicine_id}/`
+- `POST /api/v1/pharmacy/inventory/{medicine_id}/stock/`
+- `GET /api/v1/pharmacy/reports/`
 
-.env.local.example                   # Frontend env template
-IMPLEMENTATION_SUMMARY.md            # This summary
-```
+## Data Model Updates
 
-## Backend — What Was Implemented
+### Patients (`hms_archive.patients`)
+Added/updated:
+- `status`: active | inactive | dead
+- `general_data_complete: bool`
+- `outstanding_debt: float`
+- `status_updates[]`
+- Tier 2 demographic fields made optional
 
-### Authentication
+### Visits (`hms_archive.visits`)
+Added/updated:
+- `visit_type`: standard | debt_payment
+- `dispensed_by`, `dispensed_by_name`
+- `checked_in_by`, `checked_in_by_name`
+- `dispense_items[]`
+- `medicines_total`
+- `payment`
+- `debt_snapshot`
 
-- `POST /api/v1/auth/login/`: verifies staff credentials and issues access/refresh tokens
-- `POST /api/v1/auth/refresh/`: rotates refresh token and returns new token pair
-- `POST /api/v1/auth/logout/`: blacklists access token and revokes refresh token
+### Active Sessions (`hms_active.active_sessions`)
+Simplified to:
+- `patient_id`, `patient_name`
+- `checked_in_by`, `checked_in_by_name`, `checked_in_at`
+- `status`: checked_in | dispensing | completed
+- `dispense_items[]`
+- `outstanding_debt_at_checkin`
 
-JWT payload fields include:
+### Medicines (`hms_archive.medicines`)
+Verified active inventory fields:
+- `name`, `category`, `unit`, `unit_price`, `stock_quantity`, `is_active`
 
-- `user_id`
-- `role`
-- `hospital_id`
-- `jti`
-- `exp`
+## Payment Flow
 
-Token lifetimes come from env:
+### Methods
+1. `cash`: full `total_due` must be cash
+2. `online`: full `total_due` must be online
+3. `debt`: full `total_due` moves to `new_debt`
+4. `split`: any valid combination where `cash + online + new_debt == total_due`
 
-- `JWT_ACCESS_TOKEN_LIFETIME_MINUTES`
-- `JWT_REFRESH_TOKEN_LIFETIME_DAYS`
+### Debt Lifecycle
+- Existing debt is loaded from `patient.outstanding_debt`.
+- Checkout computes: `new_outstanding = debt_before - debt_cleared + new_debt`.
+- Debt-only payment endpoint allows walk-in debt settlement without active session.
+- Each checkout/debt-payment persists debt movement in visit `payment` and `debt_snapshot`.
 
-### Receptionist Module
+### Atomic Checkout Transaction
+`ArchiveService.close_visit` performs, inside one MongoDB transaction:
+1. Read active session and patient debt state
+2. Validate payment and stock
+3. Insert archive visit
+4. Update patient visits and debt
+5. Deduct stock for dispensed items
+6. Delete active session
 
-- `POST /api/v1/patients`
-- `GET /api/v1/patients/{patientId}`
-- `GET /api/v1/patients/by-registration/{registrationNumber}`
-- `POST /api/v1/patients/lookup-fingerprint`
-- `POST /api/v1/visits`
-- `PATCH /api/v1/visits/{activeSessionId}/assign-counsellor`
-- `GET /api/v1/visits/active`
+## Changes From Previous Implementation
 
-### Consultant Module
+### Removed Endpoints
+- Receptionist assignment pipeline endpoints (`visits`, assign counsellor, active visits)
+- Consultant queue/session progression endpoints (queue/start/context/notes/assign-doctor/history)
+- Legacy pharmacy dispense/close/history endpoints tied to doctor-stage flow
 
-- `GET /api/v1/consultant/queue`
-- `POST /api/v1/consultant/sessions/{activeSessionId}/start`
-- `GET /api/v1/consultant/sessions/{activeSessionId}/context`
-- `POST /api/v1/consultant/sessions/{activeSessionId}/notes`
-- `PATCH /api/v1/consultant/sessions/{activeSessionId}/assign-doctor`
-- `GET /api/v1/consultant/history`
+Reason: previous linear assignment pipeline and doctor-led prescription flow were deprecated.
 
-### Doctor Module
+### Modified Endpoints
+- Patient registration changed to Tier 1 only contract
+- Patient lookup now returns `status` for deceased-blocking UX
+- Session check-in moved to explicit `/sessions/checkin/` flow with deceased/session-conflict checks
 
-- `GET /api/v1/doctor/queue`
-- `POST /api/v1/doctor/consultations/{activeSessionId}/start`
-- `GET /api/v1/doctor/consultations/{activeSessionId}/context`
-- `POST /api/v1/doctor/consultations/{activeSessionId}/findings`
-- `POST /api/v1/doctor/consultations/{activeSessionId}/prescriptions`
-- `PATCH /api/v1/doctor/consultations/{activeSessionId}/assign-pharmacy`
-- `GET /api/v1/medicines/search`
-- `GET /api/v1/doctor/history`
+### New Endpoints
+- Patient general data patch endpoint
+- Counsellor follow-up list, status update, reports
+- Receptionist reports endpoint
+- New pharmacy session/dispense/checkout/debt/report endpoints
+- Inventory patch and additive stock endpoints
 
-### Pharmacy Module
+### Schema Field Deltas
+Added:
+- `Patient.general_data_complete`
+- `Patient.outstanding_debt`
+- `Patient.status_updates[]`
+- `Visit.visit_type`
+- `Visit.dispense_items[]`
+- `Visit.payment`
+- `Visit.debt_snapshot`
+- `ActiveSession.status` with simplified choices
 
-- `GET /api/v1/pharmacy/queue`
-- `GET /api/v1/pharmacy/dispense/{activeSessionId}`
-- `POST /api/v1/pharmacy/dispense/{activeSessionId}/submit`
-- `POST /api/v1/pharmacy/visits/{activeSessionId}/close`
-- `GET /api/v1/pharmacy/inventory`
-- `PATCH /api/v1/pharmacy/inventory/{medicineId}/stock`
-- `POST /api/v1/pharmacy/inventory/add`
-- `GET /api/v1/pharmacy/history`
+Removed from active flow/schema usage:
+- doctor assignment and doctor-stage pipeline fields from active session processing
 
-### Patient Records
+## Frontend Integration Notes
+- Added central API module: `lib/api-client.ts`
+- Added frontend environment template: `.env.local.example` with `NEXT_PUBLIC_API_URL`
+- Existing Next.js pages currently still rely heavily on demo store stubs and require systematic endpoint wiring across receptionist/counsellor/pharmacy pages.
 
-- `GET /api/v1/patients/{patientId}/summary`
-- `GET /api/v1/patients/{patientId}/history`
-- `GET /api/v1/visits/{visitId}/detail`
+## Seed Data
+`seed_db` now seeds:
+- role accounts for receptionist/consultant/doctor/pharmacy
+- at least 2 medicines for 3 categories
+- active patient with debt for debt flow
+- deceased patient for check-in block testing
+- incomplete general-data patient (`general_data_complete=false`) for profile completion flow
+- idempotent create-if-missing behavior
 
-### Archive Service
+## Validation Status
+Environment in this workspace currently lacks Django runtime dependencies, so full runtime checks could not be completed here.
 
-`apps/sessions/archive_service.py` performs archival from active to archive storage. The close flow:
+Performed:
+- structural refactor of endpoint map and data models
+- transaction flow implementation for checkout archive
 
-1. Reads active session
-2. Builds archived visit payload
-3. Writes archive visit document
-4. Updates patient visit references/counters
-5. Removes active session and related lock state
-
-On failure, the service raises an error and returns standardized failure responses from the view layer.
-
-## Database
-
-### hms_archive Collections
-
-- `patients`: patient master record and profile snapshots, with identity/fingerprint/search indexes
-- `visits`: immutable completed visit history with embedded stage snapshots and history indexes
-- `staff`: role-based staff identity and auth profile
-- `medicines`: medicine catalog + stock state
-- `inventory_transactions`: immutable stock movement ledger
-- `auth_refresh_tokens`: refresh-token store with revocation and TTL expiry
-
-### hms_active Collections
-
-- `active_sessions`: single in-progress workflow object
-- `active_locks`: race-condition lock documents
-- `auth_blacklist`: access-token blacklist with TTL
-
-## Frontend Integration
-
-### API Client
-
-- Location: `lib/api-client.ts`
-- Auth headers: bearer token from localStorage auto-attached to authenticated requests
-- 401 handling: auto-attempt refresh; on failure clears auth and redirects to `/login`
-
-### Pages Updated
-
-- `app/login/page.tsx`: uses backend login
-- `app/reception/page.tsx`: uses active visits endpoint for dashboard data
-- `app/reception/register/page.tsx`: replaced demo patient creation with `POST /api/v1/patients`
-- `app/reception/checkin/page.tsx`: uses search/fingerprint lookup + visit creation APIs
-- `app/reception/queue/page.tsx`: uses active visits API
-- `app/counsellor/page.tsx`: uses consultant queue API
-- `app/counsellor/queue/page.tsx`: uses consultant queue API
-- `app/counsellor/session/[visitId]/page.tsx`: uses consultant start/context/notes/assign APIs
-- `app/counsellor/history/page.tsx`: uses consultant history API
-- `app/doctor/page.tsx`: uses doctor queue API
-- `app/doctor/queue/page.tsx`: uses doctor queue API
-- `app/doctor/consultation/[visitId]/page.tsx`: uses doctor start/context/findings/prescription/assign APIs
-- `app/doctor/history/page.tsx`: uses doctor history API
-- `app/pharmacy/page.tsx`: uses pharmacy queue API
-- `app/pharmacy/queue/page.tsx`: uses pharmacy queue API
-- `app/pharmacy/dispense/[visitId]/page.tsx`: uses dispense and close-visit APIs
-- `app/pharmacy/inventory/page.tsx`: replaced demo inventory mutations with inventory APIs
-
-### Environment Variables Added
-
-- Frontend:
-  - `NEXT_PUBLIC_API_URL`: backend base URL for Next.js client requests
-- Backend (template in `.env.example`):
-  - `DJANGO_SECRET_KEY`
-  - `DJANGO_DEBUG`
-  - `DJANGO_ALLOWED_HOSTS`
-  - `MONGODB_ARCHIVE_URI`
-  - `MONGODB_ACTIVE_URI`
-  - `MONGODB_ARCHIVE_DB`
-  - `MONGODB_ACTIVE_DB`
-  - `CORS_ALLOWED_ORIGINS`
-  - `JWT_SECRET_KEY`
-  - `JWT_ACCESS_TOKEN_LIFETIME_MINUTES`
-  - `JWT_REFRESH_TOKEN_LIFETIME_DAYS`
-  - `DEFAULT_HOSPITAL_ID`
-
-## How to Run Locally
-
-### Prerequisites
-
-- Python 3.11+
-- Node.js 20+
-- MongoDB Atlas cluster (or local replica set) with `hms_archive` and `hms_active`
-
-### Backend Setup
-
-```bash
-cd hms_backend
-python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env
-# Edit .env — add your MongoDB URIs and generate a Django SECRET_KEY
-python manage.py seed_db
-python manage.py runserver
-```
-
-### Frontend Setup
-
-```bash
-cd .
-cp .env.local.example .env.local
-# Edit .env.local — set NEXT_PUBLIC_API_URL=http://localhost:8000
-npm install
-npm run dev
-```
-
-### Seed Accounts
-
-| Role         | Username / Email     | Password      |
-| ------------ | -------------------- | ------------- |
-| Receptionist | reception@hms.local  | reception123  |
-| Consultant   | counsellor@hms.local | counsellor123 |
-| Doctor       | doctor@hms.local     | doctor123     |
-| Pharmacy     | pharmacy@hms.local   | pharmacy123   |
+Not executable in this environment:
+- `python manage.py runserver`
+- `python manage.py seed_db`
 
 ## What Remains To Be Done
-
-- Admin role and admin panel:
-  - Out of scope by product constraints.
-  - Would require dedicated staff role, guarded endpoints, and admin UI pages.
-- Invoice generation (pharmacy):
-  - Out of scope by product constraints.
-  - Current invoice UI pages may remain demo-backed until invoice domain is specified.
-- Fingerprint hardware SDK integration:
-  - Current implementation hashes captured template strings.
-  - Full RD/SDK integration requires vendor device SDK and secure capture middleware.
-- Production hardening:
-  - HTTPS termination, stricter CORS/hosts, secrets vaulting, structured observability, and rate limiting are not implemented.
-- Caching layer:
-  - Explicitly out of scope.
-- Endpoint parity checks:
-  - API is substantially implemented; verify strict request/response parity against architecture spec before production.
-- Frontend demo remnants:
-  - `app/pharmacy/invoices/page.tsx` remains demo-backed (invoice domain out of scope).
-  - `app/admin/*` remains demo-backed (admin scope out of scope).
-- Atlas index operations:
-  - Models define indexes, but production Atlas environments may still require controlled index rollout strategy.
-
-## Known Limitations
-
-- Backend runtime validation (`python manage.py check`, `runserver`, `seed_db`) requires installing backend Python dependencies in a local virtual environment.
-- Some route details intentionally differ from the architecture document (`/visits/{id}/detail`, `/pharmacy/dispense/{id}/submit`) based on implemented code paths.
-- Cross-role relationship authorization checks should be further hardened and centralized for strict policy enforcement under all edge cases.
+1. Admin dashboard:
+   - follow-up threshold configuration
+   - staff/user management
+2. Doctor module reactivation:
+   - redesign dormant doctor endpoints against simplified active-session schema
+   - reintroduce doctor frontend wiring only if product direction requires
+3. Invoice/receipt generation:
+   - printable and persisted billing artifacts
+4. Exportable reports:
+   - add CSV/PDF export endpoint layer over current aggregated structures
+5. SQL migration for pharmacy inventory:
+   - explicitly deferred; inventory remains in MongoDB in this implementation
+6. Fingerprint hardware SDK integration:
+   - replace placeholder hash-flow assumptions with production SDK handshake
+7. Production hardening:
+   - HTTPS termination, rate limiting, stricter env configs, secrets rotation
+8. Frontend full wiring:
+   - migrate demo-store-driven pages to real backend calls via central API client

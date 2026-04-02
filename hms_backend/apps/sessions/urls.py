@@ -1,9 +1,9 @@
 """URL routes for the sessions app."""
 from django.urls import path
+from apps.sessions.views import CheckinView
 
 app_name = 'sessions'
 
-# Sessions don't have standalone endpoints — they are accessed through
-# role-specific apps (consultant, doctor, pharmacy). This file exists
-# to satisfy the include() in the root URL config.
-urlpatterns = []
+urlpatterns = [
+	path('sessions/checkin/', CheckinView.as_view(), name='session-checkin'),
+]

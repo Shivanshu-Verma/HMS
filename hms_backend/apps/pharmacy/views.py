@@ -1,479 +1,467 @@
-"""
-Pharmacy views for dispensing and inventory management.
-
-Handles queue listing, dispense detail/execution, visit closing,
-inventory listing/stock updates/medicine creation, and history.
-"""
+"""Pharmacy endpoints for queue, dispensing, checkout, debt, inventory, and reports."""
 import datetime
-import logging
-import uuid
+from collections import defaultdict
 
-from rest_framework.views import APIView
 from bson import ObjectId
-from django.conf import settings
+from rest_framework.views import APIView
 
 from apps.auth_app.permissions import IsPharmacy
-from apps.sessions.models import ActiveSession, ActivePharmacyStage, DispenseItem
-from apps.patients.models import Visit, Patient, Medicine, InventoryTransaction
-from apps.receptionist.serializers import serialize_active_session_for_queue
-from apps.patients.serializers import serialize_visit_summary
-from apps.doctor.serializers import serialize_medicine
-from apps.pharmacy.serializers import DispenseSerializer, AddStockSerializer, AddMedicineSerializer
-from utils.response import success_response, paginated_response
-from utils.pagination import parse_pagination_params, paginate_queryset
-from utils.exceptions import NotFoundError, ConflictError, HMSError
+from apps.patients.models import DispenseItem, Medicine, Patient, Visit
+from apps.pharmacy.serializers import (
+    AddStockSerializer,
+    CheckoutSerializer,
+    DebtPaymentSerializer,
+    DispenseSubmitSerializer,
+    MedicineCreateSerializer,
+    MedicineUpdateSerializer,
+)
+from apps.pharmacy.services import PaymentValidator
+from apps.sessions.archive_service import ArchiveService
+from apps.sessions.models import ActiveSession, DispenseItem as ActiveDispenseItem
+from utils.exceptions import ConflictError, NotFoundError, ValidationError
+from utils.response import success_response
 
-logger = logging.getLogger(__name__)
+
+def _serialize_medicine(med: Medicine) -> dict:
+    return {
+        'medicine_id': str(med.id),
+        'name': med.name,
+        'category': med.category,
+        'unit': med.unit,
+        'unit_price': float(med.unit_price),
+        'stock_quantity': med.stock_quantity,
+        'description': med.manufacturer or '',
+        'is_active': med.is_active,
+    }
 
 
 class PharmacyQueueView(APIView):
-    """
-    Get the pharmacy queue — patients at the 'pharmacy' stage.
-
-    GET /api/v1/pharmacy/queue
-    """
+    """List all currently checked-in active sessions for pharmacy processing."""
 
     permission_classes = [IsPharmacy]
 
     def get(self, request):
-        """
-        Return all sessions at the pharmacy stage.
+        sessions = ActiveSession.objects.order_by('checked_in_at')
 
-        Args:
-            request: DRF request.
+        items = []
+        for session in sessions:
+            patient = Patient.objects(id=session.patient_id).only('outstanding_debt').first()
+            items.append(
+                {
+                    'session_id': str(session.id),
+                    'patient_id': str(session.patient_id),
+                    'patient_name': session.patient_name,
+                    'checked_in_at': session.checked_in_at.isoformat(),
+                    'checked_in_by_name': session.checked_in_by_name,
+                    'outstanding_debt': float(patient.outstanding_debt if patient else session.outstanding_debt_at_checkin),
+                    'session_status': session.status,
+                }
+            )
 
-        Returns:
-            Response: List of sessions awaiting dispensing.
-        """
-        hospital_id = ObjectId(request.user.hospital_id)
-
-        sessions = ActiveSession.objects(
-            hospital_id=hospital_id,
-            state__current_stage='pharmacy',
-            state__status='in_progress',
-        ).order_by('timestamps__doctor_completed_at')
-
-        serialized = []
-        for s in sessions:
-            data = serialize_active_session_for_queue(s)
-            # Enrich with prescription medicine names
-            if s.doctor_stage and s.doctor_stage.prescriptions:
-                for p in data.get('doctor_stage', {}).get('prescriptions', []):
-                    try:
-                        med = Medicine.objects.get(id=ObjectId(p['medicine_id']))
-                        p['medicine_name'] = med.name
-                        p['medicine_unit'] = med.unit
-                        p['price_per_unit'] = med.price_per_unit
-                        p['stock_quantity'] = med.stock_quantity
-                    except Medicine.DoesNotExist:
-                        p['medicine_name'] = 'Unknown'
-            serialized.append(data)
-
-        return success_response({'items': serialized, 'total': len(serialized)})
+        return success_response({'items': items, 'total': len(items)})
 
 
-class DispenseDetailView(APIView):
-    """
-    Get full dispense details for a session in the pharmacy queue.
-
-    GET /api/v1/pharmacy/dispense/{id}
-    """
+class PharmacySessionDetailView(APIView):
+    """Return session-level data used by dispensing UI."""
 
     permission_classes = [IsPharmacy]
 
     def get(self, request, session_id):
-        """
-        Return session with prescription details and medicine info for dispensing.
-
-        Args:
-            request: DRF request.
-            session_id: ActiveSession ObjectId string.
-
-        Returns:
-            Response: Full session data with enriched prescription/medicine info.
-        """
         try:
             session = ActiveSession.objects.get(id=ObjectId(session_id))
         except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
+            raise NotFoundError(message='Session not found.', code='SESSION_NOT_FOUND')
 
-        data = serialize_active_session_for_queue(session)
+        patient = Patient.objects(id=session.patient_id).first()
+        if not patient:
+            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
 
-        # Enrich prescriptions with medicine details
-        if session.doctor_stage and session.doctor_stage.prescriptions:
-            for p in data.get('doctor_stage', {}).get('prescriptions', []):
-                try:
-                    med = Medicine.objects.get(id=ObjectId(p['medicine_id']))
-                    p['medicine_name'] = med.name
-                    p['medicine_unit'] = med.unit
-                    p['price_per_unit'] = med.price_per_unit
-                    p['stock_quantity'] = med.stock_quantity
-                except Medicine.DoesNotExist:
-                    p['medicine_name'] = 'Unknown'
-
-        return success_response(data)
-
-
-class DispenseView(APIView):
-    """
-    Dispense medicines — deduct stock and record dispensing data.
-
-    POST /api/v1/pharmacy/dispense/{id}
-    """
-
-    permission_classes = [IsPharmacy]
-
-    def post(self, request, session_id):
-        """
-        Process medicine dispensing: deduct stock, record transactions, update session.
-
-        Args:
-            request: DRF request with dispense items.
-            session_id: ActiveSession ObjectId string.
-
-        Returns:
-            Response: Updated session data with stock deductions.
-        """
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
-
-        if session.state.current_stage != 'pharmacy':
-            raise ConflictError(message="Session is not at the pharmacy stage.", code="WRONG_STAGE")
-
-        serializer = DispenseSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        now = datetime.datetime.utcnow()
-        pharmacist_id = ObjectId(request.user.id)
-        hospital_id = ObjectId(request.user.hospital_id)
-
-        dispense_items = []
-        stock_deductions = []
-
-        for item in data['items']:
-            if not item.get('selected', True):
-                continue
-
-            medicine_id = ObjectId(item['medicine_id'])
-            qty = item['quantity_dispensed']
-
-            if qty <= 0:
-                continue
-
-            try:
-                medicine = Medicine.objects.get(id=medicine_id)
-            except Medicine.DoesNotExist:
-                continue
-
-            stock_before = medicine.stock_quantity
-            stock_after = max(0, stock_before - qty)
-
-            # Deduct stock
-            medicine.stock_quantity = stock_after
-            medicine.updated_at = now
-            medicine.save()
-
-            # Create inventory transaction
-            InventoryTransaction(
-                hospital_id=hospital_id,
-                medicine_id=medicine_id,
-                transaction_type='out',
-                quantity=qty,
-                stock_before=stock_before,
-                stock_after=stock_after,
-                reference_type='dispense',
-                reference_id=session.id,
-                performed_by=pharmacist_id,
-                notes=f"Dispensed for patient {session.patient_snapshot.full_name}",
-                created_at=now,
-            ).save()
-
-            dispense_items.append(DispenseItem(
-                medicine_id=medicine_id,
-                quantity_prescribed=qty,
-                quantity_dispensed=qty,
-                selected_for_dispense=True,
-                stock_before=stock_before,
-                stock_after=stock_after,
-            ))
-
-        # Update pharmacy stage
-        session.pharmacy_stage = ActivePharmacyStage(
-            dispense_items=dispense_items,
-            completed_by=pharmacist_id,
-            completed_at=now,
+        return success_response(
+            {
+                'session_id': str(session.id),
+                'patient': {
+                    'patient_id': str(patient.id),
+                    'full_name': patient.full_name,
+                    'phone_number': patient.phone,
+                    'date_of_birth': patient.date_of_birth.date().isoformat() if patient.date_of_birth else None,
+                    'sex': patient.gender,
+                    'registration_number': patient.registration_number,
+                },
+                'outstanding_debt': float(patient.outstanding_debt or 0.0),
+                'dispense_items': [
+                    {
+                        'medicine_id': str(item.medicine_id),
+                        'medicine_name': item.medicine_name,
+                        'quantity': item.quantity,
+                        'unit_price': item.unit_price,
+                        'line_total': item.line_total,
+                    }
+                    for item in session.dispense_items
+                ],
+                'session_status': session.status,
+            }
         )
 
-        session.assignments.pharmacist_id = pharmacist_id
-        session.timestamps.pharmacy_started_at = now
-        session.timestamps.updated_at = now
-        session.updated_at = now
 
-        if pharmacist_id not in session.participants:
-            session.participants.append(pharmacist_id)
-
-        session.save()
-
-        return success_response(serialize_active_session_for_queue(session))
-
-
-class CloseVisitView(APIView):
-    """
-    Close a visit — archive the session and clean up.
-
-    POST /api/v1/pharmacy/visits/{id}/close
-    """
-
-    permission_classes = [IsPharmacy]
-
-    def post(self, request, session_id):
-        """
-        Archive the active session to the visits collection and delete it.
-
-        Args:
-            request: DRF request.
-            session_id: ActiveSession ObjectId string.
-
-        Returns:
-            Response: Archived visit summary.
-        """
-        from apps.sessions.archive_service import archive_session
-
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
-
-        if session.state.current_stage != 'pharmacy':
-            raise ConflictError(message="Session is not at the pharmacy stage.", code="WRONG_STAGE")
-
-        if not session.pharmacy_stage or not session.pharmacy_stage.completed_at:
-            raise HMSError(
-                code="NOT_DISPENSED",
-                message="Please dispense medicines before closing the visit.",
-                status_code=400,
-            )
-
-        pharmacist_id = ObjectId(request.user.id)
-        archived_visit = archive_session(session, pharmacist_id)
-
-        return success_response(serialize_visit_summary(archived_visit))
-
-
-class InventoryListView(APIView):
-    """
-    List all medicines in inventory.
-
-    GET /api/v1/pharmacy/inventory
-    """
+class PharmacyMedicineSearchView(APIView):
+    """Search active medicines with stock for pharmacist dispensing dropdowns."""
 
     permission_classes = [IsPharmacy]
 
     def get(self, request):
-        """
-        Return all medicines with optional search/filter.
+        q = request.query_params.get('q', '').strip()
+        page = max(1, int(request.query_params.get('page', 1)))
+        page_size = max(1, int(request.query_params.get('pageSize', 20)))
 
-        Args:
-            request: DRF request with optional 'q' and 'filter' query params.
-
-        Returns:
-            Response: Paginated list of medicines.
-        """
-        hospital_id = ObjectId(request.user.hospital_id)
-        query = request.query_params.get('q', '').strip()
-        stock_filter = request.query_params.get('filter', 'all')
-        page, page_size = parse_pagination_params(request)
-
-        medicines = Medicine.objects(hospital_id=hospital_id).order_by('name')
-
-        if query:
-            import re
-            pattern = re.escape(query)
-            medicines = medicines.filter(
+        query = Medicine.objects(is_active=True, stock_quantity__gt=0)
+        if q:
+            query = query.filter(
                 __raw__={
                     '$or': [
-                        {'name': {'$regex': pattern, '$options': 'i'}},
-                        {'generic_name': {'$regex': pattern, '$options': 'i'}},
+                        {'name': {'$regex': q, '$options': 'i'}},
+                        {'category': {'$regex': q, '$options': 'i'}},
                     ]
                 }
             )
 
-        if stock_filter == 'low':
-            medicines = medicines.filter(
-                __raw__={
-                    '$expr': {
-                        '$and': [
-                            {'$lte': ['$stock_quantity', '$reorder_level']},
-                            {'$gt': ['$stock_quantity', 0]},
-                        ]
+        total = query.count()
+        medicines = query.order_by('name').skip((page - 1) * page_size).limit(page_size)
+
+        return success_response(
+            {
+                'items': [
+                    {
+                        'medicine_id': str(m.id),
+                        'name': m.name,
+                        'category': m.category,
+                        'unit_price': float(m.unit_price),
+                        'stock_quantity': m.stock_quantity,
                     }
-                }
-            )
-        elif stock_filter == 'out':
-            medicines = medicines.filter(stock_quantity=0)
+                    for m in medicines
+                ],
+                'pagination': {
+                    'page': page,
+                    'pageSize': page_size,
+                    'total': total,
+                },
+            }
+        )
 
-        items, total, has_next = paginate_queryset(medicines, page, page_size)
-        serialized = [serialize_medicine(m) for m in items]
 
-        return paginated_response(serialized, page, page_size, total, has_next)
-
-
-class AddStockView(APIView):
-    """
-    Add stock to a medicine.
-
-    PATCH /api/v1/pharmacy/inventory/{id}/stock
-    """
+class PharmacyDispenseView(APIView):
+    """Save dispense items to an active session without deducting stock yet."""
 
     permission_classes = [IsPharmacy]
 
-    def patch(self, request, medicine_id):
-        """
-        Increase stock for a medicine and record the transaction.
-
-        Args:
-            request: DRF request with quantity.
-            medicine_id: Medicine ObjectId string.
-
-        Returns:
-            Response: Updated medicine data.
-        """
-        try:
-            medicine = Medicine.objects.get(id=ObjectId(medicine_id))
-        except Medicine.DoesNotExist:
-            raise NotFoundError(message="Medicine not found.", code="MEDICINE_NOT_FOUND")
-
-        serializer = AddStockSerializer(data=request.data)
+    def post(self, request, session_id):
+        serializer = DispenseSubmitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        now = datetime.datetime.utcnow()
-        qty = serializer.validated_data['quantity']
-        notes = serializer.validated_data.get('notes', 'Stock replenishment')
-        hospital_id = ObjectId(request.user.hospital_id)
-        pharmacist_id = ObjectId(request.user.id)
+        try:
+            session = ActiveSession.objects.get(id=ObjectId(session_id))
+        except ActiveSession.DoesNotExist:
+            raise NotFoundError(message='Session not found.', code='SESSION_NOT_FOUND')
 
-        stock_before = medicine.stock_quantity
-        stock_after = stock_before + qty
+        active_items = []
+        for item in serializer.validated_data['items']:
+            medicine = Medicine.objects(id=ObjectId(item['medicine_id']), is_active=True).first()
+            if not medicine:
+                raise NotFoundError(message='Medicine not found.', code='MEDICINE_NOT_FOUND')
+            if medicine.stock_quantity < item['quantity']:
+                raise ConflictError(
+                    code='INSUFFICIENT_STOCK',
+                    message=f"Insufficient stock for {medicine.name}",
+                )
 
-        medicine.stock_quantity = stock_after
-        medicine.updated_at = now
-        medicine.save()
+            line_total = float(item['quantity'] * item['unit_price'])
+            active_items.append(
+                ActiveDispenseItem(
+                    medicine_id=medicine.id,
+                    medicine_name=medicine.name,
+                    quantity=item['quantity'],
+                    unit_price=float(item['unit_price']),
+                    line_total=line_total,
+                )
+            )
 
-        InventoryTransaction(
-            hospital_id=hospital_id,
-            medicine_id=medicine.id,
-            transaction_type='in',
-            quantity=qty,
-            stock_before=stock_before,
-            stock_after=stock_after,
-            reference_type='stock_update',
-            performed_by=pharmacist_id,
-            notes=notes,
-            created_at=now,
-        ).save()
+        session.dispense_items = active_items
+        session.status = 'dispensing'
+        session.updated_at = datetime.datetime.utcnow()
+        session.save()
 
-        return success_response(serialize_medicine(medicine))
+        medicines_total = sum(item.line_total for item in active_items)
+        return success_response(
+            {
+                'session_id': str(session.id),
+                'status': session.status,
+                'dispense_items': [
+                    {
+                        'medicine_id': str(i.medicine_id),
+                        'medicine_name': i.medicine_name,
+                        'quantity': i.quantity,
+                        'unit_price': i.unit_price,
+                        'line_total': i.line_total,
+                    }
+                    for i in session.dispense_items
+                ],
+                'medicines_total': medicines_total,
+            }
+        )
 
 
-class AddMedicineView(APIView):
-    """
-    Add a new medicine to the catalog.
+class PharmacyCheckoutView(APIView):
+    """Validate payment and close active session into archive transactionally."""
 
-    POST /api/v1/pharmacy/inventory
-    """
+    permission_classes = [IsPharmacy]
+
+    def post(self, request, session_id):
+        serializer = CheckoutSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        result = ArchiveService.close_visit(
+            session_id=session_id,
+            payment_data=serializer.validated_data['payment'],
+            pharmacist_id=ObjectId(request.user.id),
+            pharmacist_name=request.user.full_name,
+        )
+        return success_response(result)
+
+
+class PharmacyDebtPaymentView(APIView):
+    """Settle old debt without creating an active check-in session."""
 
     permission_classes = [IsPharmacy]
 
     def post(self, request):
-        """
-        Create a new medicine document.
-
-        Args:
-            request: DRF request with medicine details.
-
-        Returns:
-            Response: Created medicine data.
-        """
-        serializer = AddMedicineSerializer(data=request.data)
+        serializer = DebtPaymentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
 
-        hospital_id = ObjectId(request.user.hospital_id)
-        now = datetime.datetime.utcnow()
+        patient_id = ObjectId(serializer.validated_data['patient_id'])
+        payment = serializer.validated_data['payment']
 
-        expiry_date = None
-        if data.get('expiry_date'):
-            expiry_date = datetime.datetime.combine(data['expiry_date'], datetime.time())
+        cash_amount = float(payment.get('cash_amount', 0.0) or 0.0)
+        online_amount = float(payment.get('online_amount', 0.0) or 0.0)
+        debt_cleared = float(payment.get('debt_cleared', 0.0) or 0.0)
 
-        medicine = Medicine(
-            hospital_id=hospital_id,
-            medicine_uid=f"MED-{uuid.uuid4().hex[:8].upper()}",
-            name=data['name'],
-            generic_name=data.get('generic_name'),
-            category=data.get('category'),
-            manufacturer=data.get('manufacturer'),
-            unit=data['unit'],
-            price_per_unit=data['price_per_unit'],
-            stock_quantity=data.get('stock_quantity', 0),
-            reorder_level=data.get('reorder_level', 50),
-            expiry_date=expiry_date,
-            is_active=True,
-            created_by=ObjectId(request.user.id),
-            created_at=now,
-            updated_at=now,
+        if abs((cash_amount + online_amount) - debt_cleared) > PaymentValidator.TOLERANCE:
+            raise ValidationError(
+                code='DEBT_PAYMENT_MISMATCH',
+                message='cash_amount + online_amount must equal debt_cleared.',
+            )
+
+        patient = Patient.objects(id=patient_id).first()
+        if not patient:
+            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+
+        if debt_cleared > float(patient.outstanding_debt or 0.0) + PaymentValidator.TOLERANCE:
+            raise ValidationError(code='DEBT_CLEARED_EXCEEDS_OUTSTANDING', message='debt_cleared exceeds outstanding debt.')
+
+        debt_before = float(patient.outstanding_debt or 0.0)
+        debt_after = float(debt_before - debt_cleared)
+        patient.outstanding_debt = debt_after
+        patient.updated_at = datetime.datetime.utcnow()
+        patient.save()
+
+        visit = Visit(
+            hospital_id=patient.hospital_id,
+            visit_uid=f"DEBT-{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+            visit_type='debt_payment',
+            patient_id=patient.id,
+            visit_date=datetime.datetime.utcnow(),
+            checked_in_by=None,
+            checked_in_by_name='debt-payment',
+            dispensed_by=ObjectId(request.user.id),
+            dispensed_by_name=request.user.full_name,
+            dispense_items=[],
+            medicines_total=0.0,
+            payment={
+                'method': 'split' if cash_amount > 0 and online_amount > 0 else ('cash' if cash_amount > 0 else 'online'),
+                'cash_amount': cash_amount,
+                'online_amount': online_amount,
+                'new_debt': 0.0,
+                'debt_cleared': debt_cleared,
+                'total_charged': debt_before,
+            },
+            debt_snapshot={'debt_before': debt_before, 'debt_after': debt_after},
+            created_at=datetime.datetime.utcnow(),
         )
-        medicine.save()
+        visit.save()
 
-        # Record initial stock if > 0
-        if medicine.stock_quantity > 0:
-            InventoryTransaction(
-                hospital_id=hospital_id,
-                medicine_id=medicine.id,
-                transaction_type='in',
-                quantity=medicine.stock_quantity,
-                stock_before=0,
-                stock_after=medicine.stock_quantity,
-                reference_type='stock_update',
-                performed_by=ObjectId(request.user.id),
-                notes='Initial stock on creation',
-                created_at=now,
-            ).save()
+        patient.visits.append(visit.id)
+        patient.visit_ids.append(visit.id)
+        patient.visit_count += 1
+        patient.last_visit_at = visit.visit_date
+        patient.save()
 
-        return success_response(serialize_medicine(medicine), status=201)
+        return success_response({'patient_id': str(patient.id), 'outstanding_debt': debt_after})
 
 
-class PharmacyHistoryView(APIView):
-    """
-    Get pharmacist's completed dispensing history.
-
-    GET /api/v1/pharmacy/history
-    """
+class PharmacyInventoryView(APIView):
+    """List or create medicines in pharmacy inventory."""
 
     permission_classes = [IsPharmacy]
 
     def get(self, request):
-        """
-        Return paginated visit history for visits this pharmacist completed.
+        q = request.query_params.get('q', '').strip()
+        category = request.query_params.get('category', '').strip()
+        page = max(1, int(request.query_params.get('page', 1)))
+        page_size = max(1, int(request.query_params.get('pageSize', 20)))
 
-        Args:
-            request: DRF request.
+        query = Medicine.objects
+        if q:
+            query = query.filter(name__icontains=q)
+        if category:
+            query = query.filter(category=category)
 
-        Returns:
-            Response: Paginated archived visit summaries.
-        """
-        hospital_id = ObjectId(request.user.hospital_id)
+        total = query.count()
+        medicines = query.order_by('name').skip((page - 1) * page_size).limit(page_size)
+
+        return success_response(
+            {
+                'items': [_serialize_medicine(m) for m in medicines],
+                'pagination': {'page': page, 'pageSize': page_size, 'total': total},
+            }
+        )
+
+    def post(self, request):
+        serializer = MedicineCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        medicine = Medicine(
+            hospital_id=ObjectId(request.user.hospital_id),
+            medicine_uid=f"MED-{str(ObjectId())[-8:].upper()}",
+            name=data['name'],
+            category=data['category'],
+            unit=data['unit'],
+            unit_price=float(data['unit_price']),
+            stock_quantity=int(data['stock_quantity']),
+            manufacturer=data.get('description', ''),
+            is_active=True,
+            created_by=ObjectId(request.user.id),
+            created_at=datetime.datetime.utcnow(),
+            updated_at=datetime.datetime.utcnow(),
+        )
+        medicine.save()
+
+        return success_response(_serialize_medicine(medicine), status=201)
+
+
+class PharmacyInventoryItemView(APIView):
+    """Patch medicine attributes excluding stock quantity."""
+
+    permission_classes = [IsPharmacy]
+
+    def patch(self, request, medicine_id):
+        serializer = MedicineUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        medicine = Medicine.objects(id=ObjectId(medicine_id)).first()
+        if not medicine:
+            raise NotFoundError(message='Medicine not found.', code='MEDICINE_NOT_FOUND')
+
+        for field in ['name', 'category', 'unit', 'unit_price', 'is_active']:
+            if field in serializer.validated_data:
+                setattr(medicine, field, serializer.validated_data[field])
+
+        if 'description' in serializer.validated_data:
+            medicine.manufacturer = serializer.validated_data['description']
+
+        medicine.updated_at = datetime.datetime.utcnow()
+        medicine.save()
+
+        return success_response(_serialize_medicine(medicine))
+
+
+class PharmacyAddStockView(APIView):
+    """Increment existing stock quantity for a medicine."""
+
+    permission_classes = [IsPharmacy]
+
+    def post(self, request, medicine_id):
+        serializer = AddStockSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        medicine = Medicine.objects(id=ObjectId(medicine_id)).first()
+        if not medicine:
+            raise NotFoundError(message='Medicine not found.', code='MEDICINE_NOT_FOUND')
+
+        medicine.stock_quantity += serializer.validated_data['quantity_to_add']
+        medicine.updated_at = datetime.datetime.utcnow()
+        medicine.save()
+
+        return success_response(_serialize_medicine(medicine))
+
+
+class PharmacyReportsView(APIView):
+    """Return daily/monthly/yearly pharmacist transaction and revenue metrics."""
+
+    permission_classes = [IsPharmacy]
+
+    def get(self, request):
         pharmacist_id = ObjectId(request.user.id)
-        page, page_size = parse_pagination_params(request)
+        now = datetime.datetime.utcnow()
+        today = now.date()
 
-        visits = Visit.objects(
-            hospital_id=hospital_id,
-            assignments__pharmacist_id=pharmacist_id,
-        ).order_by('-lifecycle__completed_at')
+        visits = Visit.objects(dispensed_by=pharmacist_id)
 
-        items, total, has_next = paginate_queryset(visits, page, page_size)
-        serialized = [serialize_visit_summary(v) for v in items]
+        day_stats = defaultdict(lambda: {'count': 0, 'revenue': 0.0, 'cash': 0.0, 'online': 0.0, 'debt_added': 0.0, 'debt_cleared': 0.0})
+        for visit in visits:
+            key = visit.visit_date.date()
+            payment = visit.payment or {}
+            day_stats[key]['count'] += 1
+            day_stats[key]['revenue'] += float(payment.get('cash_amount', 0.0) + payment.get('online_amount', 0.0))
+            day_stats[key]['cash'] += float(payment.get('cash_amount', 0.0))
+            day_stats[key]['online'] += float(payment.get('online_amount', 0.0))
+            day_stats[key]['debt_added'] += float(payment.get('new_debt', 0.0))
+            day_stats[key]['debt_cleared'] += float(payment.get('debt_cleared', 0.0))
 
-        return paginated_response(serialized, page, page_size, total, has_next)
+        daily = day_stats.get(today, {'count': 0, 'revenue': 0.0, 'cash': 0.0, 'online': 0.0, 'debt_added': 0.0, 'debt_cleared': 0.0})
+
+        monthly_breakdown = []
+        monthly_transactions = 0
+        monthly_revenue = 0.0
+        cursor = datetime.date(today.year, today.month, 1)
+        while cursor.month == today.month:
+            stat = day_stats.get(cursor, {'count': 0, 'revenue': 0.0})
+            monthly_breakdown.append({'day': cursor.day, 'total_transactions': stat['count'], 'total_revenue': stat['revenue']})
+            monthly_transactions += stat['count']
+            monthly_revenue += stat['revenue']
+            cursor += datetime.timedelta(days=1)
+
+        yearly_breakdown = []
+        yearly_transactions = 0
+        yearly_revenue = 0.0
+        for month in range(1, 13):
+            month_transactions = sum(v['count'] for d, v in day_stats.items() if d.year == today.year and d.month == month)
+            month_revenue = sum(v['revenue'] for d, v in day_stats.items() if d.year == today.year and d.month == month)
+            yearly_breakdown.append({'month': month, 'total_transactions': month_transactions, 'total_revenue': month_revenue})
+            yearly_transactions += month_transactions
+            yearly_revenue += month_revenue
+
+        return success_response(
+            {
+                'daily': {
+                    'date': today.isoformat(),
+                    'total_transactions': daily['count'],
+                    'total_revenue': daily['revenue'],
+                    'cash_collected': daily['cash'],
+                    'online_collected': daily['online'],
+                    'debt_added': daily['debt_added'],
+                    'debt_cleared': daily['debt_cleared'],
+                },
+                'monthly': {
+                    'year': today.year,
+                    'month': today.month,
+                    'breakdown': monthly_breakdown,
+                    'total_transactions': monthly_transactions,
+                    'total_revenue': monthly_revenue,
+                },
+                'yearly': {
+                    'year': today.year,
+                    'breakdown': yearly_breakdown,
+                    'total_transactions': yearly_transactions,
+                    'total_revenue': yearly_revenue,
+                },
+            }
+        )

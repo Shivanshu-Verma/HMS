@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { doctorApi } from '@/lib/api-client';
+import { store } from '@/lib/demo-store';
 import type { DoctorConsultation, Patient, Prescription } from '@/lib/types';
 import { Search, FileText, Calendar, Pill } from 'lucide-react';
 
@@ -17,35 +17,20 @@ export default function DoctorHistoryPage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const result = await doctorApi.getHistory();
-        if (result.success && result.data?.items) {
-          const mapped = result.data.items.map((v: any) => ({
-            id: v.id,
-            visit_id: v.id,
-            patient_id: v.patient_id || '',
-            doctor_id: '',
-            diagnosis: v.diagnosis || v.doctor_stage?.diagnosis || 'N/A',
-            treatment_plan: v.doctor_stage?.treatment_plan || '',
-            clinical_notes: v.doctor_stage?.clinical_notes || '',
-            vital_signs: v.doctor_stage?.vital_signs || null,
-            next_visit_date: v.doctor_stage?.next_visit_date || null,
-            created_at: v.completed_at || v.visit_date || '',
-            patient: {
-              id: v.patient_id || '',
-              full_name: v.patient_name || 'Unknown',
-              registration_number: v.patient_registration_number || '',
-            } as any,
-            prescriptions: v.prescriptions || [],
-          }));
-          setConsultations(mapped);
-        }
-      } catch (err) {
-        console.error('Failed to fetch history:', err);
-      }
-    };
-    fetchData();
+    const allConsultations = store
+      .getConsultations()
+      .map((consultation) => ({
+        ...consultation,
+        patient: store.getPatientById(consultation.patient_id)!,
+        prescriptions: store.getPrescriptionsByVisit(consultation.visit_id).map((p) => ({
+          ...p,
+          medicine: store.getMedicineById(p.medicine_id),
+        })),
+      }))
+      .filter((c) => c.patient)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    setConsultations(allConsultations);
   }, []);
 
   const filteredConsultations = consultations.filter((consultation) => {

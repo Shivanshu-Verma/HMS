@@ -1,10 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { doctorApi } from '@/lib/api-client';
+import { store } from '@/lib/demo-store';
 import type { Visit, Patient, CounsellorSession } from '@/lib/types';
 import { PatientCard } from '@/components/patient-card';
 import { RiskBadge } from '@/components/status-badge';
@@ -25,42 +24,36 @@ function getWaitTime(time?: string): string {
 }
 
 export default function DoctorQueuePage() {
-  const router = useRouter();
   const [queue, setQueue] = useState<VisitWithDetails[]>([]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const result = await doctorApi.getQueue();
-        if (result.success && result.data?.items) {
-          const mapped = result.data.items.map((v: any) => ({
-            id: v.id,
-            patient_id: v.patient_id,
-            visit_date: v.visit_date?.split('T')[0] || '',
-            visit_number: v.visit_number,
-            current_stage: v.current_stage,
-            checkin_time: v.checkin_time,
-            counsellor_end_time: v.counsellor_end_time,
-            status: v.status,
-            patient: v.patient || { id: v.patient_id, full_name: 'Unknown', registration_number: '', phone: '', gender: '', date_of_birth: '', addiction_type: '' },
-            session: v.counsellor_stage ? {
-              risk_level: v.counsellor_stage.risk_level,
-              session_notes: v.counsellor_stage.session_notes,
-              mood_assessment: v.counsellor_stage.mood_assessment,
-              recommendations: v.counsellor_stage.recommendations,
-            } : undefined,
-          }));
-          setQueue(mapped);
-        }
-      } catch (err) {
-        console.error('Failed to fetch queue:', err);
-      }
-    };
-    fetchData();
+    const doctorQueue = store
+      .getVisitsByStage('doctor')
+      .map((visit) => {
+        const patient = store.getPatientById(visit.patient_id);
+        const session = store.getSessionByVisit(visit.id);
+        return {
+          ...visit,
+          patient: patient!,
+          session,
+        };
+      })
+      .filter((v) => v.patient)
+      .sort((a, b) => {
+        // Prioritize high-risk patients
+        if (a.session?.risk_level === 'high' && b.session?.risk_level !== 'high') return -1;
+        if (b.session?.risk_level === 'high' && a.session?.risk_level !== 'high') return 1;
+        
+        const timeA = a.counsellor_end_time ? new Date(a.counsellor_end_time).getTime() : 0;
+        const timeB = b.counsellor_end_time ? new Date(b.counsellor_end_time).getTime() : 0;
+        return timeA - timeB;
+      });
+
+    setQueue(doctorQueue);
   }, []);
 
   const handleStartConsultation = (visitId: string) => {
-    router.push(`/doctor/consultation/${visitId}`);
+    window.location.href = `/doctor/consultation/${visitId}`;
   };
 
   return (

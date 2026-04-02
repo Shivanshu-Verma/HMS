@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 
-type StatusVariant = 'default' | 'success' | 'warning' | 'danger' | 'info';
+type StatusVariant = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'primary';
 
 const variantStyles: Record<StatusVariant, string> = {
   default: 'bg-secondary text-secondary-foreground',
@@ -8,6 +8,7 @@ const variantStyles: Record<StatusVariant, string> = {
   warning: 'bg-amber-100 text-amber-800',
   danger: 'bg-red-100 text-red-800',
   info: 'bg-sky-100 text-sky-800',
+  primary: 'bg-[#0d7377]/10 text-[#0d7377]',
 };
 
 interface StatusBadgeProps {
@@ -33,10 +34,10 @@ export function StatusBadge({ children, variant = 'default', className }: Status
 // Predefined status badges
 export function StageStatus({ stage }: { stage: string }) {
   const stageConfig: Record<string, { label: string; variant: StatusVariant }> = {
-    checkin: { label: 'Check-in', variant: 'info' },
+    checkin: { label: 'Check-in', variant: 'primary' },
     counsellor: { label: 'Counsellor', variant: 'warning' },
     doctor: { label: 'Doctor', variant: 'info' },
-    pharmacy: { label: 'Pharmacy', variant: 'warning' },
+    pharmacy: { label: 'Pharmacy', variant: 'primary' },
     completed: { label: 'Completed', variant: 'success' },
   };
 
@@ -59,7 +60,7 @@ export function PaymentBadge({ status }: { status: string }) {
   const paymentConfig: Record<string, { label: string; variant: StatusVariant }> = {
     pending: { label: 'Pending', variant: 'warning' },
     paid: { label: 'Paid', variant: 'success' },
-    partial: { label: 'Partial', variant: 'info' },
+    partial: { label: 'Partial', variant: 'primary' },
   };
 
   const config = paymentConfig[status] || { label: status, variant: 'default' };

@@ -20,36 +20,35 @@ export interface RDServiceInfo {
 // Check if RD Service is running
 export async function checkRDService(): Promise<RDServiceInfo> {
   try {
-    const response = await fetch("https://localhost:11100/rd/info", {
-      method: "RDSERVICE",
+    const response = await fetch('https://localhost:11100/rd/info', {
+      method: 'RDSERVICE',
       signal: AbortSignal.timeout(3000),
     });
-
+    
     if (response.ok) {
       const xmlText = await response.text();
       // Parse device info from XML response
       const parser = new DOMParser();
-      const doc = parser.parseFromString(xmlText, "text/xml");
-
-      const deviceInfo = doc.querySelector("RDService");
+      const doc = parser.parseFromString(xmlText, 'text/xml');
+      
+      const deviceInfo = doc.querySelector('RDService');
       if (deviceInfo) {
         return {
           available: true,
           deviceInfo: {
-            name: deviceInfo.getAttribute("info") || "Mantra MFS100",
-            serial: deviceInfo.getAttribute("dpId") || "Unknown",
-            status: deviceInfo.getAttribute("status") || "READY",
+            name: deviceInfo.getAttribute('info') || 'Mantra MFS100',
+            serial: deviceInfo.getAttribute('dpId') || 'Unknown',
+            status: deviceInfo.getAttribute('status') || 'READY',
           },
         };
       }
     }
-
-    return { available: false, error: "RD Service not responding properly" };
+    
+    return { available: false, error: 'RD Service not responding properly' };
   } catch (error) {
-    return {
-      available: false,
-      error:
-        "RD Service not detected. Please ensure Mantra driver is installed.",
+    return { 
+      available: false, 
+      error: 'RD Service not detected. Please ensure Mantra driver is installed.',
     };
   }
 }
@@ -70,26 +69,25 @@ export async function captureFingerprint(): Promise<BiometricResult> {
         timeout="10000" posh="UNKNOWN" env="P" />
 </PidOptions>`;
 
-    const response = await fetch("https://localhost:11100/rd/capture", {
-      method: "CAPTURE",
-      headers: { "Content-Type": "text/xml" },
+    const response = await fetch('https://localhost:11100/rd/capture', {
+      method: 'CAPTURE',
+      headers: { 'Content-Type': 'text/xml' },
       body: captureXML,
       signal: AbortSignal.timeout(15000),
     });
 
     if (response.ok) {
       const pidXML = await response.text();
-
+      
       // Check for errors in PID response
       const parser = new DOMParser();
-      const doc = parser.parseFromString(pidXML, "text/xml");
-      const respElement = doc.querySelector("Resp");
-
+      const doc = parser.parseFromString(pidXML, 'text/xml');
+      const respElement = doc.querySelector('Resp');
+      
       if (respElement) {
-        const errCode = respElement.getAttribute("errCode");
-        if (errCode && errCode !== "0") {
-          const errInfo =
-            respElement.getAttribute("errInfo") || "Capture failed";
+        const errCode = respElement.getAttribute('errCode');
+        if (errCode && errCode !== '0') {
+          const errInfo = respElement.getAttribute('errInfo') || 'Capture failed';
           return { success: false, error: errInfo };
         }
       }
@@ -97,26 +95,23 @@ export async function captureFingerprint(): Promise<BiometricResult> {
       return { success: true, data: pidXML };
     }
 
-    return { success: false, error: "Failed to capture fingerprint" };
+    return { success: false, error: 'Failed to capture fingerprint' };
   } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
-      return { success: false, error: "Capture timed out. Please try again." };
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      return { success: false, error: 'Capture timed out. Please try again.' };
     }
-    return {
-      success: false,
-      error: "Fingerprint capture failed. Please try again.",
-    };
+    return { success: false, error: 'Fingerprint capture failed. Please try again.' };
   }
 }
 
 // Demo mode simulation
 export async function simulateFingerprint(): Promise<BiometricResult> {
   // Simulate a delay for realistic feel
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  
   // Generate a simulated fingerprint template
   const template = `DEMO_FP_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-
+  
   return {
     success: true,
     data: template,
@@ -127,10 +122,10 @@ export async function simulateFingerprint(): Promise<BiometricResult> {
 // In production, this would use actual biometric matching algorithms
 export function matchFingerprint(captured: string, stored: string): boolean {
   // Demo mode: Always match for demo templates
-  if (captured.startsWith("DEMO_FP_") || stored.startsWith("DEMO_FP_")) {
+  if (captured.startsWith('DEMO_FP_') || stored.startsWith('DEMO_FP_')) {
     return true;
   }
-
+  
   // In production, implement actual matching logic using Mantra SDK
   // or send to a matching service
   return captured === stored;

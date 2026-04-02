@@ -1,9 +1,9 @@
 "use client";
 
-import { useAuth } from "@/lib/auth-context";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
-import { DashboardSidebar } from "@/components/dashboard-sidebar";
+import { useEffect, useState } from "react";
+import { useAuth, hasRole } from "@/lib/auth-context";
+import { DashboardLayout } from "@/components/dashboard-sidebar";
+import { Spinner } from "@/components/ui/spinner";
 
 export default function AdminLayout({
   children,
@@ -11,25 +11,29 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const { user, isLoading } = useAuth();
-  const router = useRouter();
+  const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
-    if (!isLoading && (!user || user.role !== "admin")) {
-      router.push("/login");
-    }
-  }, [user, isLoading, router]);
+    setIsMounted(true);
+  }, []);
 
-  if (isLoading) {
+  useEffect(() => {
+    if (isMounted && !isLoading && !hasRole(user, ['admin'])) {
+      window.location.href = "/login";
+    }
+  }, [user, isLoading, isMounted]);
+
+  if (!isMounted || isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Spinner className="h-8 w-8" />
       </div>
     );
   }
 
-  if (!user || user.role !== "admin") {
+  if (!hasRole(user, ['admin'])) {
     return null;
   }
 
-  return <DashboardSidebar role="admin">{children}</DashboardSidebar>;
+  return <DashboardLayout>{children}</DashboardLayout>;
 }

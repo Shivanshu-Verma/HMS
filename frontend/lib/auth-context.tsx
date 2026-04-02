@@ -1,109 +1,130 @@
-"use client";
+'use client';
 
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  type ReactNode,
-} from "react";
-import type { User, UserRole } from "./types";
-import {
-  authApi,
-  getStoredUser,
-  clearTokens,
-  getAccessToken,
-} from "./api-client";
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import type { User, UserRole } from './types';
+import { login as apiLogin } from './hms-api';
+import { store } from './demo-store';
+import { useDemoData } from './runtime-mode';
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (
-    email: string,
-    password: string,
-  ) => Promise<{ success: boolean; error?: string }>;
+  accessToken: string | null;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   isDemo: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-/**
- * Maps backend role names to frontend role names.
- * Backend uses 'consultant' and 'pharmacy'; frontend uses 'counsellor' and 'pharmacist'.
- */
-function mapBackendRole(backendRole: string): UserRole {
-  const roleMap: Record<string, UserRole> = {
-    receptionist: "reception",
-    consultant: "counsellor",
-    doctor: "doctor",
-    pharmacy: "pharmacist",
-  };
-  return roleMap[backendRole] || (backendRole as UserRole);
+const demoPasswords: Record<string, string> = {
+  'admin@deaddiction.com': 'admin123',
+  'reception@deaddiction.com': 'reception123',
+  'counsellor@deaddiction.com': 'counsellor123',
+  'doctor@deaddiction.com': 'doctor123',
+  'pharmacy@deaddiction.com': 'pharmacy123',
+};
+
+function mapBackendRole(role: string): UserRole {
+  if (role === 'receptionist') return 'reception';
+  if (role === 'consultant') return 'counsellor';
+  if (role === 'pharmacy') return 'pharmacist';
+  if (role === 'doctor') return 'doctor';
+  return 'reception';
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
-    // Check for stored user on mount
-    const storedUser = getStoredUser();
-    if (storedUser && getAccessToken()) {
+    setIsMounted(true);
+    
+    // Check for stored user and token on mount.
+    if (typeof window !== 'undefined') {
       try {
-        setUser({
-          id: storedUser.id,
-          full_name: storedUser.full_name,
-          email: storedUser.email,
-          role: mapBackendRole(storedUser.role),
-          is_active: true,
-          created_at: storedUser.created_at || new Date().toISOString(),
-        });
+        const storedUser = localStorage.getItem(useDemoData ? 'demo_user' : 'hms_user');
+        const storedToken = localStorage.getItem('hms_access_token');
+        if (storedUser) {
+          setUser(JSON.parse(storedUser));
+        }
+        if (!useDemoData && storedToken) {
+          setAccessToken(storedToken);
+        }
       } catch {
-        clearTokens();
+        localStorage.removeItem('demo_user');
+        localStorage.removeItem('hms_user');
+        localStorage.removeItem('hms_access_token');
       }
     }
     setIsLoading(false);
   }, []);
 
   const login = async (email: string, password: string) => {
-    try {
-      const result = await authApi.login(email, password);
-
-      if (result.success && result.data?.user) {
-        const backendUser = result.data.user;
-        const frontendUser: User = {
-          id: backendUser.id,
-          full_name: backendUser.full_name,
-          email: backendUser.email,
-          role: mapBackendRole(backendUser.role),
-          is_active: true,
-          created_at: new Date().toISOString(),
-        };
-        setUser(frontendUser);
-        return { success: true };
+    if (useDemoData) {
+      const demoUser = store.getUserByEmail(email);
+      if (!demoUser) {
+        return { success: false, error: 'User not found' };
+      }
+      if (demoPasswords[email] !== password) {
+        return { success: false, error: 'Invalid password' };
+      }
+      if (!demoUser.is_active) {
+        return { success: false, error: 'Account is deactivated' };
       }
 
-      return { success: false, error: "Login failed" };
-    } catch (err: any) {
-      return { success: false, error: err.message || "Login failed" };
+      setUser(demoUser);
+      setAccessToken(null);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('demo_user', JSON.stringify(demoUser));
+      }
+      return { success: true };
+    }
+
+    try {
+      const result = await apiLogin(email, password);
+      const mappedUser: User = {
+        id: result.user.id,
+        email: result.user.email,
+        full_name: result.user.full_name,
+        role: mapBackendRole(result.user.role),
+        is_active: true,
+        created_at: new Date().toISOString(),
+      };
+
+      setUser(mappedUser);
+      setAccessToken(result.access_token);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('hms_user', JSON.stringify(mappedUser));
+        localStorage.setItem('hms_access_token', result.access_token);
+      }
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Login failed';
+      return { success: false, error: message };
     }
   };
 
-  const logout = async () => {
-    try {
-      await authApi.logout();
-    } catch {
-      // Non-critical
-    }
+  const logout = () => {
     setUser(null);
-    clearTokens();
+    setAccessToken(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('demo_user');
+      localStorage.removeItem('hms_user');
+      localStorage.removeItem('hms_access_token');
+      window.location.href = '/login';
+    }
   };
+
+  // Don't render children until mounted to prevent hydration mismatch
+  if (!isMounted) {
+    return null;
+  }
 
   return (
-    <AuthContext.Provider
-      value={{ user, isLoading, login, logout, isDemo: false }}
-    >
+    <AuthContext.Provider value={{ user, isLoading, accessToken, login, logout, isDemo: useDemoData }}>
       {children}
     </AuthContext.Provider>
   );
@@ -112,7 +133,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider");
+    throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 }
@@ -125,9 +146,9 @@ export function hasRole(user: User | null, allowedRoles: UserRole[]): boolean {
 
 // Role-based route mapping
 export const roleRoutes: Record<UserRole, string> = {
-  admin: "/admin",
-  reception: "/reception",
-  counsellor: "/counsellor",
-  doctor: "/doctor",
-  pharmacist: "/pharmacy",
+  admin: '/admin',
+  reception: '/reception',
+  counsellor: '/counsellor',
+  doctor: '/doctor',
+  pharmacist: '/pharmacy',
 };

@@ -1,20 +1,23 @@
 'use client';
 
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { useAuth, hasRole } from '@/lib/auth-context';
 import { DashboardLayout } from '@/components/dashboard-sidebar';
 import { Spinner } from '@/components/ui/spinner';
 
 export default function PharmacyLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
-  const router = useRouter();
+  const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
-    if (!isLoading && !hasRole(user, ['pharmacist', 'admin'])) {
-      router.push('/login');
+    setIsMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (isMounted && !isLoading && !hasRole(user, ['pharmacist', 'admin'])) {
+      window.location.href = '/login';
     }
-  }, [user, isLoading, router]);
+  }, [user, isLoading, isMounted]);
 
   if (isLoading) {
     return (

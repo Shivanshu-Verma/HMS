@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { doctorApi, medicineApi } from '@/lib/api-client';
+import { store, generateId } from '@/lib/demo-store';
 import { useAuth } from '@/lib/auth-context';
 import type { Visit, Patient, CounsellorSession, DoctorConsultation, Medicine, Prescription, Frequency, VitalSigns } from '@/lib/types';
 import { PatientCard } from '@/components/patient-card';
@@ -39,7 +38,7 @@ import {
   Send,
   Loader2,
 } from 'lucide-react';
-import Link from 'next/link';
+import { navigate } from '@/lib/navigation';
 
 interface PrescriptionItem {
   medicine_id: string;
@@ -51,11 +50,10 @@ interface PrescriptionItem {
   instructions: string;
 }
 
-export default function ConsultationPage() {
-  const router = useRouter();
-  const params = useParams();
+export default function ConsultationPage({ params }: { params: Promise<{ visitId: string }> }) {
+  const [visitId, setVisitId] = useState<string>('');
+  const [isMounted, setIsMounted] = useState(false);
   const { user } = useAuth();
-  const visitId = params.visitId as string;
 
   const [visit, setVisit] = useState<Visit | null>(null);
   const [patient, setPatient] = useState<Patient | null>(null);
@@ -80,42 +78,35 @@ export default function ConsultationPage() {
   const [prescriptions, setPrescriptions] = useState<PrescriptionItem[]>([]);
   const [selectedMedicine, setSelectedMedicine] = useState('');
 
+  // Get params safely after mount
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Start consultation
-        await doctorApi.startConsultation(visitId);
-        
-        // Get context
-        const result = await doctorApi.getContext(visitId);
-        if (result.success && result.data) {
-          setVisit({
-            id: result.data.id,
-            patient_id: result.data.patient_id,
-            visit_date: result.data.visit_date?.split('T')[0] || '',
-            visit_number: result.data.visit_number,
-            current_stage: result.data.current_stage,
-            checkin_time: result.data.checkin_time,
-            status: result.data.status,
-          });
-          if (result.data.patient_details || result.data.patient) {
-            setPatient((result.data.patient_details || result.data.patient) as any);
-          }
-          if (result.data.counsellor_stage) {
-            setSession(result.data.counsellor_stage as any);
-          }
-        }
+    setIsMounted(true);
+    params.then((p) => setVisitId(p.visitId));
+  }, [params]);
 
-        // Load medicines
-        const medResult = await medicineApi.search('');
-        if (medResult.success && medResult.data?.items) {
-          setMedicines(medResult.data.items as any);
-        }
-      } catch (err) {
-        console.error('Failed to load consultation:', err);
+  useEffect(() => {
+    if (!visitId) return;
+    const visitData = store.getVisitById(visitId);
+    if (visitData) {
+      setVisit(visitData);
+      const patientData = store.getPatientById(visitData.patient_id);
+      if (patientData) {
+        setPatient(patientData);
       }
-    };
-    fetchData();
+      const sessionData = store.getSessionByVisit(visitId);
+      if (sessionData) {
+        setSession(sessionData);
+      }
+
+      // Mark consultation start
+      store.updateVisit(visitId, {
+        doctor_start_time: new Date().toISOString(),
+        assigned_doctor_id: user?.id,
+      });
+    }
+
+    // Load medicines
+    setMedicines(store.getMedicines().filter((m) => m.is_active && m.stock_quantity > 0));
   }, [visitId, user]);
 
   const handleAddPrescription = () => {
@@ -173,40 +164,48 @@ export default function ConsultationPage() {
 
     setIsSubmitting(true);
 
-    try {
-      // Save findings
-      await doctorApi.saveFindings(visitId, {
-        diagnosis: formData.diagnosis,
-        treatment_plan: formData.treatment_plan || '',
-        clinical_notes: formData.clinical_notes || '',
-        vital_signs: vitalSigns.blood_pressure ? vitalSigns : undefined,
-        next_visit_date: formData.next_visit_date || null,
-      });
+    // Create consultation record
+    const consultation: DoctorConsultation = {
+      id: generateId(),
+      visit_id: visit.id,
+      patient_id: patient.id,
+      doctor_id: user.id,
+      diagnosis: formData.diagnosis,
+      treatment_plan: formData.treatment_plan || undefined,
+      clinical_notes: formData.clinical_notes || undefined,
+      vital_signs: vitalSigns.blood_pressure ? vitalSigns : undefined,
+      next_visit_date: formData.next_visit_date || undefined,
+      created_at: new Date().toISOString(),
+    };
 
-      // Save prescriptions
-      if (prescriptions.length > 0) {
-        await doctorApi.savePrescriptions(
-          visitId,
-          prescriptions.map((p) => ({
-            medicine_id: p.medicine_id,
-            dosage: p.dosage,
-            frequency: p.frequency,
-            duration_days: p.duration_days,
-            quantity: p.quantity,
-            instructions: p.instructions || '',
-          }))
-        );
-      }
+    store.addConsultation(consultation);
 
-      // Move to pharmacy
-      await doctorApi.assignPharmacy(visitId);
+    // Create prescription records
+    prescriptions.forEach((p) => {
+      const prescription: Prescription = {
+        id: generateId(),
+        consultation_id: consultation.id,
+        visit_id: visit.id,
+        patient_id: patient.id,
+        medicine_id: p.medicine_id,
+        quantity: p.quantity,
+        dosage: p.dosage,
+        frequency: p.frequency,
+        duration_days: p.duration_days,
+        instructions: p.instructions || undefined,
+        dispensed: false,
+      };
+      store.addPrescription(prescription);
+    });
 
-      toast.success('Consultation completed! Patient moved to pharmacy.');
-      router.push('/doctor');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to submit consultation');
-      setIsSubmitting(false);
-    }
+    // Update visit to move to pharmacy stage
+    store.updateVisit(visit.id, {
+      current_stage: 'pharmacy',
+      doctor_end_time: new Date().toISOString(),
+    });
+
+    toast.success('Consultation completed! Patient moved to pharmacy.');
+    window.location.href = '/doctor';
   };
 
   if (!visit || !patient) {
@@ -228,11 +227,9 @@ export default function ConsultationPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild>
-          <Link href="/doctor/queue">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
+<Button variant="ghost" size="icon" onClick={() => navigate('/doctor/queue')}>
+                    <ArrowLeft className="h-4 w-4" />
+                </Button>
         <div>
           <h1 className="text-2xl font-bold text-foreground">Medical Consultation</h1>
           <p className="text-muted-foreground">Consultation with {patient.full_name}</p>
@@ -495,9 +492,9 @@ export default function ConsultationPage() {
 
           {/* Submit Button */}
           <div className="flex justify-end gap-4">
-            <Button variant="outline" asChild>
-              <Link href="/doctor/queue">Cancel</Link>
-            </Button>
+<Button variant="outline" onClick={() => navigate('/doctor/queue')}>
+                      Cancel
+                    </Button>
             <Button onClick={handleSubmit} disabled={isSubmitting}>
               {isSubmitting ? (
                 <>

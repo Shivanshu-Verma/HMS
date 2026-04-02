@@ -268,3 +268,11 @@ class IsDoctorOrPharmacy(BasePermission):
         """
         allowed = ('doctor', 'pharmacy')
         return hasattr(request.user, 'role') and request.user.role in allowed
+
+
+class IsReceptionistOrConsultant(BasePermission):
+    """Allows access to receptionist and consultant (counsellor) roles."""
+
+    def has_permission(self, request, view):
+        allowed = ('receptionist', 'consultant')
+        return hasattr(request.user, 'role') and request.user.role in allowed

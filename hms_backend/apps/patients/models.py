@@ -62,6 +62,16 @@ class Biometric(EmbeddedDocument):
     fingerprint_enrolled_at = DateTimeField(required=True)
 
 
+class StatusUpdate(EmbeddedDocument):
+    """Tracks counsellor-driven status transitions for follow-up auditing."""
+
+    updated_by = ObjectIdField(required=True)
+    updated_by_name = StringField(required=True)
+    previous_status = StringField(required=True)
+    new_status = StringField(required=True)
+    updated_at = DateTimeField(required=True)
+
+
 # ---------------------------------------------------------------------------
 # Visit embedded sub-documents
 # ---------------------------------------------------------------------------
@@ -169,6 +179,34 @@ class PrescriptionItem(EmbeddedDocument):
     dispensed_at = DateTimeField()
 
 
+class DispenseItem(EmbeddedDocument):
+    """Snapshot of a dispensed medicine line in checkout records."""
+
+    medicine_id = ObjectIdField(required=True)
+    medicine_name = StringField(required=True)
+    quantity = IntField(required=True)
+    unit_price = FloatField(required=True)
+    line_total = FloatField(required=True)
+
+
+class PaymentRecord(EmbeddedDocument):
+    """Checkout payment details captured at visit closure time."""
+
+    method = StringField(required=True, choices=('cash', 'online', 'split', 'debt'))
+    cash_amount = FloatField(default=0.0)
+    online_amount = FloatField(default=0.0)
+    new_debt = FloatField(default=0.0)
+    debt_cleared = FloatField(default=0.0)
+    total_charged = FloatField(required=True)
+
+
+class DebtSnapshot(EmbeddedDocument):
+    """Debt value before and after payment processing for a visit."""
+
+    debt_before = FloatField(required=True)
+    debt_after = FloatField(required=True)
+
+
 class StockDeduction(EmbeddedDocument):
     """Record of stock change for a single medicine during pharmacy dispensing."""
 
@@ -211,20 +249,25 @@ class Patient(Document):
     hospital_id = ObjectIdField(required=True)
     patient_uid = StringField(required=True)
     registration_number = StringField(required=True)
+    patient_category = StringField(required=False, choices=('psychiatric', 'deaddiction'))
     full_name = StringField(required=True)
     date_of_birth = DateTimeField(required=True)
     gender = StringField(required=True, choices=('male', 'female', 'other'))
-    blood_group = StringField()
+    blood_group = StringField(required=False)
     phone = StringField(required=True)
-    email = StringField()
-    address = EmbeddedDocumentField(Address, required=True)
-    aadhaar_number_last4 = StringField()
-    addiction_profile = EmbeddedDocumentField(AddictionProfile, required=True)
-    emergency_contact = EmbeddedDocumentField(EmergencyContact, required=True)
-    medical_background = EmbeddedDocumentField(MedicalBackground)
+    email = StringField(required=False)
+    address = EmbeddedDocumentField(Address, required=False)
+    aadhaar_number_last4 = StringField(required=False)
+    addiction_profile = EmbeddedDocumentField(AddictionProfile, required=False)
+    emergency_contact = EmbeddedDocumentField(EmergencyContact, required=False)
+    medical_background = EmbeddedDocumentField(MedicalBackground, required=False)
     biometric = EmbeddedDocumentField(Biometric, required=True)
-    status = StringField(required=True, default='active', choices=('active', 'discharged', 'follow_up'))
+    status = StringField(required=True, default='active', choices=('active', 'inactive', 'dead'))
+    general_data_complete = BooleanField(default=False)
+    outstanding_debt = FloatField(default=0.0, min_value=0.0)
+    status_updates = ListField(EmbeddedDocumentField(StatusUpdate), default=list)
     visit_ids = ListField(ObjectIdField(), default=list)
+    visits = ListField(ObjectIdField(), default=list)
     visit_count = IntField(required=True, default=0)
     last_visit_at = DateTimeField()
     created_by = ObjectIdField(required=True)
@@ -240,6 +283,8 @@ class Patient(Document):
             {'fields': ['hospital_id', 'biometric.fingerprint_hash_sha256'], 'unique': True, 'sparse': True},
             {'fields': ['hospital_id', 'phone']},
             {'fields': ['hospital_id', 'status', '-updated_at']},
+            {'fields': ['status']},
+            {'fields': ['status', 'outstanding_debt']},
             {
                 'fields': ['$full_name', '$registration_number', '$phone'],
                 'default_language': 'english',
@@ -258,19 +303,28 @@ class Visit(Document):
     outputs, prescription snapshots, and audit trail.
     """
 
+    visit_type = StringField(required=True, choices=('standard', 'debt_payment'), default='standard')
     hospital_id = ObjectIdField(required=True)
     visit_uid = StringField(required=True)
     patient_id = ObjectIdField(required=True)
-    patient_snapshot = EmbeddedDocumentField(PatientSnapshot, required=True)
-    visit_number = IntField(required=True)
+    patient_snapshot = EmbeddedDocumentField(PatientSnapshot, required=False)
+    visit_number = IntField(required=False)
     visit_date = DateTimeField(required=True)
-    lifecycle = EmbeddedDocumentField(VisitLifecycle, required=True)
-    assignments = EmbeddedDocumentField(VisitAssignments, required=True)
-    counsellor_stage = EmbeddedDocumentField(CounsellorStage, required=True)
-    doctor_stage = EmbeddedDocumentField(DoctorStage, required=True)
+    lifecycle = EmbeddedDocumentField(VisitLifecycle, required=False)
+    assignments = EmbeddedDocumentField(VisitAssignments, required=False)
+    counsellor_stage = EmbeddedDocumentField(CounsellorStage, required=False)
+    doctor_stage = EmbeddedDocumentField(DoctorStage, required=False)
     prescription_items = ListField(EmbeddedDocumentField(PrescriptionItem), default=list)
-    pharmacy_stage = EmbeddedDocumentField(PharmacyStage, required=True)
-    audit = EmbeddedDocumentField(VisitAudit, required=True)
+    pharmacy_stage = EmbeddedDocumentField(PharmacyStage, required=False)
+    audit = EmbeddedDocumentField(VisitAudit, required=False)
+    dispensed_by = ObjectIdField()
+    dispensed_by_name = StringField()
+    checked_in_by = ObjectIdField()
+    checked_in_by_name = StringField()
+    dispense_items = ListField(EmbeddedDocumentField(DispenseItem), default=list)
+    medicines_total = FloatField(default=0.0)
+    payment = EmbeddedDocumentField(PaymentRecord)
+    debt_snapshot = EmbeddedDocumentField(DebtSnapshot)
     created_at = DateTimeField(required=True, default=datetime.datetime.utcnow)
 
     meta = {
@@ -283,6 +337,7 @@ class Visit(Document):
             {'fields': ['hospital_id', 'assignments.counsellor_id', '-lifecycle.completed_at']},
             {'fields': ['hospital_id', 'assignments.doctor_id', '-lifecycle.completed_at']},
             {'fields': ['hospital_id', 'assignments.pharmacist_id', '-lifecycle.completed_at']},
+            {'fields': ['dispensed_by', 'visit_date']},
             {'fields': ['hospital_id', '-lifecycle.completed_at']},
             {
                 'fields': ['$doctor_stage.diagnosis', '$counsellor_stage.session_notes'],
@@ -343,12 +398,12 @@ class Medicine(Document):
     medicine_uid = StringField(required=True)
     name = StringField(required=True)
     generic_name = StringField()
-    category = StringField()
+    category = StringField(required=True)
     manufacturer = StringField()
     unit = StringField(required=True, choices=UNIT_CHOICES)
-    price_per_unit = FloatField(required=True)
+    unit_price = FloatField(required=True)
     stock_quantity = IntField(required=True, default=0)
-    reorder_level = IntField(required=True)
+    reorder_level = IntField(required=False, default=0)
     expiry_date = DateTimeField()
     is_active = BooleanField(required=True, default=True)
     created_by = ObjectIdField(required=True)
@@ -361,7 +416,9 @@ class Medicine(Document):
         'indexes': [
             {'fields': ['hospital_id', 'medicine_uid'], 'unique': True},
             {'fields': ['hospital_id', 'is_active', 'stock_quantity']},
+            {'fields': ['is_active', 'stock_quantity']},
             {'fields': ['hospital_id', 'category', 'is_active']},
+            {'fields': ['category']},
             {
                 'fields': ['$name', '$generic_name'],
                 'default_language': 'english',

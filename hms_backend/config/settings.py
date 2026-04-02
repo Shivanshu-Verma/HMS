@@ -64,8 +64,7 @@ REST_FRAMEWORK = {
 }
 
 # CORS
-# CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
 CORS_ALLOW_CREDENTIALS = True
 
 # JWT Configuration
@@ -76,6 +75,12 @@ JWT_ALGORITHM = 'HS256'
 
 # Default hospital ID for single-tenant deployment
 DEFAULT_HOSPITAL_ID = config('DEFAULT_HOSPITAL_ID', default='000000000000000000000001')
+
+# HMS domain constants
+FOLLOWUP_THRESHOLD_DAYS = 30
+PATIENT_STATUS_CHOICES = ('active', 'inactive', 'dead')
+SESSION_STATUS_CHOICES = ('checked_in', 'dispensing', 'completed')
+PAYMENT_METHOD_CHOICES = ('cash', 'online', 'split', 'debt')
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
