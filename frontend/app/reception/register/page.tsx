@@ -7,7 +7,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { generateRegistrationNumber } from '@/lib/demo-store';
+// Generate registration number locally
+function generateRegistrationNumber(): string {
+  const prefix = 'AGH';
+  const year = new Date().getFullYear().toString().slice(-2);
+  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+  return `${prefix}${year}${random}`;
+}
 import { simulateFingerprint } from '@/lib/biometric';
 import type { Gender, PatientCategory } from '@/lib/types';
 import { PATIENT_CATEGORY_LABELS } from '@/lib/types';

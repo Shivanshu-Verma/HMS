@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { navigate } from '@/lib/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { store } from '@/lib/demo-store';
+import { useAuth } from '@/lib/auth-context';
+import { getPharmacyQueue } from '@/lib/hms-api';
 import type { Visit, Patient, Prescription, Medicine } from '@/lib/types';
 import {
   Users,
@@ -26,43 +27,26 @@ interface PrescriptionQueue {
 }
 
 export default function PharmacyDashboard() {
+  const { accessToken } = useAuth();
   const [queue, setQueue] = useState<PrescriptionQueue[]>([]);
   const [todayDispensed, setTodayDispensed] = useState(0);
   const [lowStockCount, setLowStockCount] = useState(0);
   const [todayRevenue, setTodayRevenue] = useState(0);
 
   useEffect(() => {
-    // Get patients in pharmacy queue
-    const pharmacyQueue = store
-      .getVisitsByStage('pharmacy')
-      .map((visit) => {
-        const patient = store.getPatientById(visit.patient_id);
-        const prescriptions = store.getPrescriptionsByVisit(visit.id).map((p) => ({
-          ...p,
-          medicine: store.getMedicineById(p.medicine_id),
+    if (!accessToken) return;
+
+    getPharmacyQueue(accessToken)
+      .then((data) => {
+        const mapped = data.items.map((item) => ({
+          visit: { id: item.session_id, patient_id: item.patient_id, visit_date: item.checked_in_at, visit_number: 1, current_stage: 'pharmacy' as const, status: 'in_progress' as const } as Visit,
+          patient: { id: item.patient_id, full_name: item.patient_name, registration_number: '', phone: '', date_of_birth: '', gender: 'male' as const, status: 'active' as const } as Patient,
+          prescriptions: [],
         }));
-        return {
-          visit,
-          patient: patient!,
-          prescriptions,
-        };
+        setQueue(mapped);
       })
-      .filter((v) => v.patient);
-
-    setQueue(pharmacyQueue);
-
-    // Stats
-    const today = new Date().toISOString().split('T')[0];
-    const todayPrescriptions = store
-      .getPrescriptions()
-      .filter((p) => p.dispensed && p.dispensed_at?.startsWith(today));
-    setTodayDispensed(todayPrescriptions.length);
-
-    setLowStockCount(store.getLowStockMedicines().length);
-
-    const todayInvoices = store.getInvoices().filter((i) => i.invoice_date === today);
-    setTodayRevenue(todayInvoices.reduce((sum, i) => sum + i.grand_total, 0));
-  }, []);
+      .catch(() => setQueue([]));
+  }, [accessToken]);
 
   const handleDispense = (visitId: string) => {
     window.location.href = `/pharmacy/dispense/${visitId}`;

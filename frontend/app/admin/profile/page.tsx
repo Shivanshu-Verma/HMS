@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { store } from "@/lib/demo-store";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,7 +77,8 @@ export default function AdminProfilePage() {
   });
 
   useEffect(() => {
-    setUsers(store.getUsers());
+    // User management needs dedicated backend API endpoints
+    setUsers([]);
     if (user) {
       setProfileData({
         full_name: user.full_name,
@@ -115,8 +115,8 @@ export default function AdminProfilePage() {
       updated_at: new Date().toISOString(),
     };
 
-    store.addUser(userToAdd);
-    setUsers(store.getUsers());
+    // Update local state
+    setUsers(prev => [...prev, userToAdd]);
     toast.success(`${newUser.full_name} has been added as ${newUser.role}`);
     setNewUser({ full_name: "", email: "", phone: "", role: "", password: "" });
     setIsAddingUser(false);
@@ -129,8 +129,7 @@ export default function AdminProfilePage() {
 
   const handleSaveUser = () => {
     if (!editingUser) return;
-    store.updateUser(editingUser.id, editingUser);
-    setUsers(store.getUsers());
+    setUsers(prev => prev.map(u => u.id === editingUser.id ? editingUser : u));
     toast.success("User updated successfully");
     setIsEditOpen(false);
     setEditingUser(null);
@@ -141,8 +140,7 @@ export default function AdminProfilePage() {
       toast.error("You cannot delete your own account");
       return;
     }
-    store.deleteUser(userId);
-    setUsers(store.getUsers());
+    setUsers(prev => prev.filter(u => u.id !== userId));
     toast.success("User deleted successfully");
   };
 

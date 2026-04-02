@@ -5,8 +5,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getPharmacyQueue, type PharmacyQueueItem } from '@/lib/hms-api';
 import { useAuth } from '@/lib/auth-context';
-import { store } from '@/lib/demo-store';
-import { useDemoData } from '@/lib/runtime-mode';
 import { Pill, Users, Package } from 'lucide-react';
 
 interface QueueItem extends PharmacyQueueItem {}
@@ -30,24 +28,7 @@ export default function PharmacyQueuePage() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
 
   useEffect(() => {
-    if (useDemoData || !accessToken) {
-      const demoQueue = store
-        .getVisitsByStage('pharmacy')
-        .map((visit) => {
-          const patient = store.getPatientById(visit.patient_id);
-          return {
-            session_id: visit.id,
-            patient_id: visit.patient_id,
-            patient_name: patient?.full_name || 'Unknown',
-            checked_in_at: visit.checkin_time || new Date().toISOString(),
-            checked_in_by_name: 'Reception',
-            outstanding_debt: 0,
-            session_status: visit.status,
-          };
-        });
-      setQueue(demoQueue);
-      return;
-    }
+    if (!accessToken) return;
 
     getPharmacyQueue(accessToken)
       .then((res) => {
@@ -55,23 +36,7 @@ export default function PharmacyQueuePage() {
         const validated = items.filter(isQueueItem);
         setQueue(validated);
       })
-      .catch(() => {
-        const demoQueue = store
-          .getVisitsByStage('pharmacy')
-          .map((visit) => {
-            const patient = store.getPatientById(visit.patient_id);
-            return {
-              session_id: visit.id,
-              patient_id: visit.patient_id,
-              patient_name: patient?.full_name || 'Unknown',
-              checked_in_at: visit.checkin_time || new Date().toISOString(),
-              checked_in_by_name: 'Reception',
-              outstanding_debt: 0,
-              session_status: visit.status,
-            };
-          });
-        setQueue(demoQueue);
-      });
+      .catch(() => setQueue([]));
   }, [accessToken]);
 
   const handleDispense = (sessionId: string) => {

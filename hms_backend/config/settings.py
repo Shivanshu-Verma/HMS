@@ -64,7 +64,11 @@ REST_FRAMEWORK = {
 }
 
 # CORS
-CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
+_cors_raw = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000')
+if _cors_raw.strip() == '*':
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_raw.split(',') if o.strip()]
 CORS_ALLOW_CREDENTIALS = True
 
 # JWT Configuration

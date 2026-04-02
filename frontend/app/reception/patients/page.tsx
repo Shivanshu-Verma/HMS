@@ -2,7 +2,8 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import Image from 'next/image';
-import { store } from '@/lib/demo-store';
+import { useAuth } from '@/lib/auth-context';
+import { getPatientsList, type PatientLookupResponse } from '@/lib/hms-api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -84,6 +85,7 @@ import {
 } from '@/lib/types';
 
 export default function PatientDataPage() {
+  const { accessToken } = useAuth();
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [patientVisits, setPatientVisits] = useState<Visit[]>([]);
@@ -101,16 +103,50 @@ export default function PatientDataPage() {
   const [filterDistrict, setFilterDistrict] = useState<string>('all');
   const [filterState, setFilterState] = useState<string>('all');
 
-  // Load patients from store on mount
+  const mapApiPatient = (p: PatientLookupResponse): Patient => ({
+    id: p.patient_id,
+    registration_number: p.registration_number,
+    patient_category: (p.patient_category as any) || 'deaddiction',
+    full_name: p.full_name,
+    date_of_birth: p.date_of_birth,
+    phone: p.phone_number || p.phone || '',
+    gender: (p.sex || p.gender || 'male') as Gender,
+    status: p.status as PatientStatus,
+    address: (p.address_line1 || p.address || '') as string,
+    city: '',
+    state: '',
+    pincode: '',
+    addiction_type: ((p as any).addiction_type || 'other') as AddictionType,
+    addiction_duration: (p as any).addiction_duration_text || (p as any).addiction_duration || '',
+    first_visit_date: p.date_of_birth,
+    emergency_contact_name: (p as any).emergency_contact_name || '',
+    emergency_contact_phone: (p as any).emergency_contact_phone || '',
+    emergency_contact_relation: (p as any).emergency_contact_relation || '',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    blood_group: (p as any).blood_group || '',
+    email: (p as any).email || '',
+    aadhaar_number: (p as any).aadhaar_number_last4 ? `XXXX XXXX ${(p as any).aadhaar_number_last4}` : '',
+    relative_phone: (p as any).relative_phone || '',
+    medical_history: (p as any).medical_history || '',
+    allergies: (p as any).allergies || '',
+    family_history: (p as any).family_history || '',
+    current_medications: (p as any).current_medications || '',
+    previous_treatments: (p as any).previous_treatments || '',
+  });
+
+  // Load patients
   useEffect(() => {
-    setPatients(store.getPatients());
-  }, []);
+    if (!accessToken) return;
+    getPatientsList(accessToken)
+      .then((data) => setPatients(data.items.map(mapApiPatient)))
+      .catch(() => setPatients([]));
+  }, [accessToken]);
 
   // Load visits when patient is selected
   useEffect(() => {
     if (selectedPatient) {
-      const visits = store.getVisitsByPatient(selectedPatient.id);
-      setPatientVisits(visits.sort((a, b) => new Date(b.check_in_time).getTime() - new Date(a.check_in_time).getTime()));
+      setPatientVisits([]);
     }
   }, [selectedPatient]);
 
@@ -276,8 +312,8 @@ export default function PatientDataPage() {
       patient.hiv_screening ? 'Yes' : 'No',
       patient.hiv_result || '',
       patient.comorbid_medical_illness || '',
-      patient.comorbid_physical_illness || '',
-      patient.previous_treatment || '',
+      patient.comorbid_medical_illness || '',
+      patient.previous_treatments || '',
       patient.ever_hospitalized ? 'Yes' : 'No',
       patient.status || '',
       patient.registration_date ? formatDate(patient.registration_date) : '',
@@ -329,17 +365,12 @@ export default function PatientDataPage() {
 
   const handleSavePatient = () => {
     if (!editingPatient) return;
-
-    const updated = store.updatePatient(editingPatient.id, editingPatient);
-    if (updated) {
-      setPatients(store.getPatients());
-      setSelectedPatient(editingPatient);
-      toast.success('Patient data updated successfully!');
-      setIsEditOpen(false);
-      setEditingPatient(null);
-    } else {
-      toast.error('Failed to update patient data');
-    }
+    // In API mode, update locally (backend PATCH could be added later)
+    setPatients(prev => prev.map(p => p.id === editingPatient.id ? editingPatient : p));
+    setSelectedPatient(editingPatient);
+    toast.success('Patient data updated locally');
+    setIsEditOpen(false);
+    setEditingPatient(null);
   };
 
   const handleEditChange = (field: keyof Patient, value: any) => {
@@ -699,7 +730,7 @@ export default function PatientDataPage() {
                               </div>
                               <div>
                                 <p className="font-medium">
-                                  Visit on {formatDateTime(visit.check_in_time)}
+                                  Visit on {formatDateTime(visit.checkin_time)}
                                 </p>
                                 <div className="flex items-center gap-2 mt-1">
                                   <Badge variant="outline" className={getStageColor(visit.current_stage)}>
@@ -712,10 +743,10 @@ export default function PatientDataPage() {
                                 </div>
                               </div>
                             </div>
-                            {visit.check_out_time && (
+                            {visit.completed_time && (
                               <div className="text-right text-sm text-muted-foreground">
                                 <p>Checked out</p>
-                                <p className="font-medium">{formatDateTime(visit.check_out_time)}</p>
+                                <p className="font-medium">{formatDateTime(visit.completed_time)}</p>
                               </div>
                             )}
                           </div>

@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { store } from '@/lib/demo-store';
 import type { CounsellorSession, Patient } from '@/lib/types';
 import { RiskBadge } from '@/components/status-badge';
 import { Search, FileText, Calendar, Clock } from 'lucide-react';
@@ -17,16 +16,8 @@ export default function SessionHistoryPage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const allSessions = store
-      .getSessions()
-      .map((session) => ({
-        ...session,
-        patient: store.getPatientById(session.patient_id)!,
-      }))
-      .filter((s) => s.patient)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-    setSessions(allSessions);
+    // Session history needs a dedicated backend endpoint
+    setSessions([]);
   }, []);
 
   const filteredSessions = sessions.filter((session) => {

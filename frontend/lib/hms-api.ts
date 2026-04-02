@@ -371,3 +371,74 @@ export async function addMedicineStock(token: string, medicineId: string, quanti
     body: { quantity_to_add },
   });
 }
+
+// ── Reception: Dashboard stats ──
+export interface DashboardStatsResponse {
+  totalPatients: number;
+  todayVisits: number;
+  pendingCounsellor: number;
+  pendingDoctor: number;
+  pendingPharmacy: number;
+  completedToday: number;
+  lowStockMedicines: number;
+  revenue: number;
+}
+
+export async function getDashboardStats(token: string): Promise<DashboardStatsResponse> {
+  const raw = await apiRequest<Partial<DashboardStatsResponse>>('/api/v1/receptionist/dashboard/', { token });
+  return {
+    totalPatients: raw.totalPatients ?? 0,
+    todayVisits: raw.todayVisits ?? 0,
+    pendingCounsellor: raw.pendingCounsellor ?? 0,
+    pendingDoctor: raw.pendingDoctor ?? 0,
+    pendingPharmacy: raw.pendingPharmacy ?? 0,
+    completedToday: raw.completedToday ?? 0,
+    lowStockMedicines: raw.lowStockMedicines ?? 0,
+    revenue: raw.revenue ?? 0,
+  };
+}
+
+// ── Reception: Queue (active sessions) ──
+export interface QueueItem {
+  session_id: string;
+  patient_id: string;
+  patient_name: string;
+  checked_in_at: string;
+  checked_in_by_name: string;
+  status: string;
+  current_stage: string;
+  outstanding_debt: number;
+}
+
+export async function getQueueStatus(token: string) {
+  return apiRequest<{ items: QueueItem[]; total: number }>('/api/v1/receptionist/queue/', { token });
+}
+
+// ── Reception: Patient list (paginated, searchable) ──
+export async function getPatientsList(
+  token: string,
+  opts: { q?: string; page?: number; pageSize?: number } = {}
+) {
+  const params = new URLSearchParams();
+  if (opts.q) params.set('q', opts.q);
+  params.set('page', String(opts.page ?? 1));
+  params.set('pageSize', String(opts.pageSize ?? 100));
+  return apiRequest<{
+    items: PatientLookupResponse[];
+    pagination?: { page: number; pageSize: number; total: number };
+  }>(`/api/v1/receptionist/patients/?${params.toString()}`, { token });
+}
+
+// ── Patient visit history ──
+export async function getPatientVisits(token: string, patientId: string) {
+  return apiRequest<{
+    items: Array<{
+      id: string;
+      visit_uid: string;
+      visit_date: string;
+      visit_type: string;
+      medicines_total: number;
+    }>;
+  }>(`/api/v1/patients/${patientId}/visits/`, { token });
+}
+

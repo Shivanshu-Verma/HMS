@@ -17,6 +17,7 @@ from apps.patients.models import (
     Patient,
     Staff,
 )
+from apps.sessions.models import ActiveSession
 
 
 HOSPITAL_ID = ObjectId(settings.DEFAULT_HOSPITAL_ID)
@@ -31,12 +32,12 @@ STAFF_DATA = [
 
 
 MEDICINES_DATA = [
-    {'name': 'Naltrexone 50mg', 'category': 'addiction', 'unit': 'tablet', 'unit_price': 45.0, 'stock_quantity': 300, 'description': 'Opioid antagonist'},
-    {'name': 'Acamprosate 333mg', 'category': 'addiction', 'unit': 'tablet', 'unit_price': 35.0, 'stock_quantity': 250, 'description': 'Alcohol craving management'},
-    {'name': 'Paracetamol 650mg', 'category': 'analgesic', 'unit': 'tablet', 'unit_price': 5.0, 'stock_quantity': 500, 'description': 'Pain and fever'},
-    {'name': 'Ibuprofen 400mg', 'category': 'analgesic', 'unit': 'tablet', 'unit_price': 7.0, 'stock_quantity': 400, 'description': 'NSAID pain relief'},
-    {'name': 'Amoxicillin 500mg', 'category': 'antibiotic', 'unit': 'capsule', 'unit_price': 12.0, 'stock_quantity': 350, 'description': 'Broad spectrum antibiotic'},
-    {'name': 'Azithromycin 500mg', 'category': 'antibiotic', 'unit': 'tablet', 'unit_price': 20.0, 'stock_quantity': 280, 'description': 'Macrolide antibiotic'},
+    {'name': 'Naltrexone 50mg', 'category': 'addiction', 'unit': 'tablet', 'unit_price': 45.0, 'stock_quantity': 300, 'manufacturer': 'Sun Pharma', 'generic_name': 'Naltrexone'},
+    {'name': 'Acamprosate 333mg', 'category': 'addiction', 'unit': 'tablet', 'unit_price': 35.0, 'stock_quantity': 250, 'manufacturer': 'Cipla Ltd', 'generic_name': 'Acamprosate Calcium'},
+    {'name': 'Paracetamol 650mg', 'category': 'analgesic', 'unit': 'tablet', 'unit_price': 5.0, 'stock_quantity': 500, 'manufacturer': 'GSK Pharma', 'generic_name': 'Paracetamol'},
+    {'name': 'Ibuprofen 400mg', 'category': 'analgesic', 'unit': 'tablet', 'unit_price': 7.0, 'stock_quantity': 400, 'manufacturer': 'Abbott India', 'generic_name': 'Ibuprofen'},
+    {'name': 'Amoxicillin 500mg', 'category': 'antibiotic', 'unit': 'capsule', 'unit_price': 12.0, 'stock_quantity': 350, 'manufacturer': 'Alkem Labs', 'generic_name': 'Amoxicillin'},
+    {'name': 'Azithromycin 500mg', 'category': 'antibiotic', 'unit': 'tablet', 'unit_price': 20.0, 'stock_quantity': 280, 'manufacturer': 'Zydus Cadila', 'generic_name': 'Azithromycin'},
 ]
 
 
@@ -50,6 +51,8 @@ PATIENTS = [
         'status': 'active',
         'outstanding_debt': 0.0,
         'general': True,
+        'patient_category': 'deaddiction',
+        'aadhaar_last4': '4321',
     },
     {
         'fingerprint_hash': 'seed-fp-active-debt',
@@ -60,6 +63,8 @@ PATIENTS = [
         'status': 'active',
         'outstanding_debt': 650.0,
         'general': True,
+        'patient_category': 'deaddiction',
+        'aadhaar_last4': '8765',
     },
     {
         'fingerprint_hash': 'seed-fp-dead',
@@ -70,6 +75,8 @@ PATIENTS = [
         'status': 'dead',
         'outstanding_debt': 0.0,
         'general': True,
+        'patient_category': 'psychiatric',
+        'aadhaar_last4': '1234',
     },
     {
         'fingerprint_hash': 'seed-fp-incomplete',
@@ -80,6 +87,8 @@ PATIENTS = [
         'status': 'active',
         'outstanding_debt': 0.0,
         'general': False,
+        'patient_category': None,
+        'aadhaar_last4': None,
     },
 ]
 
@@ -91,6 +100,7 @@ class Command(BaseCommand):
         self._seed_staff()
         self._seed_medicines()
         self._seed_patients()
+        self._seed_active_session()
         self.stdout.write(self.style.SUCCESS('seed_db completed successfully.'))
 
     def _seed_staff(self):
@@ -124,11 +134,12 @@ class Command(BaseCommand):
                 hospital_id=HOSPITAL_ID,
                 medicine_uid=f"MED-{uuid.uuid4().hex[:8].upper()}",
                 name=med['name'],
+                generic_name=med.get('generic_name', ''),
                 category=med['category'],
                 unit=med['unit'],
                 unit_price=med['unit_price'],
                 stock_quantity=med['stock_quantity'],
-                manufacturer=med['description'],
+                manufacturer=med.get('manufacturer', ''),
                 reorder_level=20,
                 is_active=True,
                 created_by=created_by,
@@ -165,10 +176,14 @@ class Command(BaseCommand):
                 status=row['status'],
                 outstanding_debt=row['outstanding_debt'],
                 general_data_complete=row['general'],
+                visit_count=0,
                 created_by=created_by,
                 created_at=now,
                 updated_at=now,
             )
+
+            if row.get('patient_category'):
+                patient.patient_category = row['patient_category']
 
             if row['general']:
                 patient.address = Address(
@@ -188,5 +203,43 @@ class Command(BaseCommand):
                 )
                 patient.email = f"seed{index}@example.com"
                 patient.blood_group = 'O+'
+                if row.get('aadhaar_last4'):
+                    patient.aadhaar_number_last4 = row['aadhaar_last4']
 
             patient.save()
+
+    def _seed_active_session(self):
+        """Seed one active session so the receptionist/consultant flow can be tested."""
+        # Find the first active, complete patient with no outstanding debt
+        patient = Patient.objects(
+            hospital_id=HOSPITAL_ID,
+            biometric__fingerprint_hash_sha256='seed-fp-active-complete',
+        ).first()
+
+        if not patient:
+            self.stdout.write(self.style.WARNING('Skipping active session seed — patient not found.'))
+            return
+
+        # Don't duplicate if this patient already has an active session
+        existing = ActiveSession.objects(patient_id=patient.id).first()
+        if existing:
+            return
+
+        receptionist = Staff.objects(hospital_id=HOSPITAL_ID, role='receptionist').first()
+        if not receptionist:
+            self.stdout.write(self.style.WARNING('Skipping active session seed — receptionist not found.'))
+            return
+
+        now = datetime.datetime.utcnow()
+        ActiveSession(
+            hospital_id=HOSPITAL_ID,
+            patient_id=patient.id,
+            patient_name=patient.full_name,
+            checked_in_by=receptionist.id,
+            checked_in_by_name=receptionist.full_name,
+            checked_in_at=now,
+            status='checked_in',
+            outstanding_debt_at_checkin=patient.outstanding_debt,
+            created_at=now,
+            updated_at=now,
+        ).save()

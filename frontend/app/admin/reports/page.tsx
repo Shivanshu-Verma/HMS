@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { store } from "@/lib/demo-store";
+import { useState, useMemo, useEffect } from "react";
+import { useAuth } from '@/lib/auth-context';
+import { getPatientsList } from '@/lib/hms-api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -66,18 +67,48 @@ const COLORS = {
 };
 
 export default function AdminReportsPage() {
+  const { accessToken } = useAuth();
   const [activeTab, setActiveTab] = useState("overview");
   const [dateRange, setDateRange] = useState({
     from: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0],
     to: new Date().toISOString().split('T')[0],
   });
   const [categoryFilter, setCategoryFilter] = useState<PatientCategory | "all">("all");
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [visits] = useState<Visit[]>([]);
+  const [invoices] = useState<any[]>([]);
+  const [medicines] = useState<any[]>([]);
+  const [users] = useState<any[]>([]);
 
-  const patients = store.getPatients();
-  const visits = store.getVisits();
-  const invoices = store.getInvoices();
-  const medicines = store.getMedicines();
-  const users = store.getUsers();
+  useEffect(() => {
+    if (!accessToken) return;
+    getPatientsList(accessToken)
+      .then((data) => {
+        const mapped = data.items.map((item: any) => ({
+          id: item.id || item._id,
+          registration_number: item.registration_number || '',
+          patient_category: item.patient_category || 'deaddiction',
+          full_name: item.full_name || '',
+          date_of_birth: item.date_of_birth || item.dob || '',
+          gender: item.gender || 'other',
+          phone: item.phone_number || item.phone || '',
+          address: item.address || '',
+          city: item.city || '',
+          state: item.state || '',
+          pincode: item.pincode || '',
+          addiction_type: item.addiction_type || 'other',
+          first_visit_date: item.registration_date || '',
+          emergency_contact_name: item.emergency_contact_name || '',
+          emergency_contact_phone: item.emergency_contact_phone || '',
+          emergency_contact_relation: item.emergency_contact_relation || '',
+          status: item.status || 'active',
+          created_at: item.created_at || new Date().toISOString(),
+          updated_at: item.updated_at || new Date().toISOString(),
+        } as Patient));
+        setPatients(mapped);
+      })
+      .catch(() => setPatients([]));
+  }, [accessToken]);
 
   const today = new Date().toISOString().split("T")[0];
 

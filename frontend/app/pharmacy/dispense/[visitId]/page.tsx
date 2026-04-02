@@ -21,9 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { store, generateId, generateInvoiceNumber } from '@/lib/demo-store';
 import { useAuth } from '@/lib/auth-context';
-import { useDemoData } from '@/lib/runtime-mode';
 import {
   checkoutPharmacySession,
   getPharmacySessionDetail,
@@ -90,29 +88,7 @@ export default function DispensePage({ params }: { params: Promise<{ visitId: st
   }, [params]);
 
   useEffect(() => {
-    if (!visitId) return;
-    if (useDemoData || !accessToken) {
-      const visitData = store.getVisitById(visitId);
-      if (visitData) {
-        setVisit(visitData);
-        const patientData = store.getPatientById(visitData.patient_id);
-        if (patientData) {
-          setPatient(patientData);
-        }
-        const consultationData = store.getConsultationByVisit(visitId);
-        if (consultationData) {
-          setConsultation(consultationData);
-        }
-
-        const prescriptionData = store.getPrescriptionsByVisit(visitId).map((p) => ({
-          ...p,
-          medicine: store.getMedicineById(p.medicine_id),
-          selected: true,
-        }));
-        setPrescriptions(prescriptionData);
-      }
-      return;
-    }
+    if (!visitId || !accessToken) return;
 
     getPharmacySessionDetail(accessToken, visitId)
       .then((session) => {
@@ -193,25 +169,6 @@ export default function DispensePage({ params }: { params: Promise<{ visitId: st
       return sum + price * p.quantity;
     }, 0);
 
-    if (useDemoData || !accessToken) {
-      const consultationFee = 500;
-      const subtotal = consultationFee + medicineTotal;
-      const discountAmount = (subtotal * discount) / 100;
-      const afterDiscount = subtotal - discountAmount;
-      const tax = afterDiscount * 0.05;
-      const grandTotal = afterDiscount + tax;
-
-      return {
-        consultationFee,
-        medicineTotal,
-        subtotal,
-        discountAmount,
-        tax,
-        grandTotal,
-        totalDue: grandTotal,
-      };
-    }
-
     const totalDue = medicineTotal + outstandingDebt;
 
     return {
@@ -226,7 +183,7 @@ export default function DispensePage({ params }: { params: Promise<{ visitId: st
   };
 
   const handleDispense = async () => {
-    if (!visit || !patient || !user) return;
+    if (!visit || !patient || !user || !accessToken) return;
 
     const selectedPrescriptions = prescriptions.filter((p) => p.selected);
     if (selectedPrescriptions.length === 0) {
@@ -236,126 +193,66 @@ export default function DispensePage({ params }: { params: Promise<{ visitId: st
 
     setIsSubmitting(true);
 
-    if (!useDemoData && accessToken) {
-      try {
-        const dispensePayload = {
-          items: selectedPrescriptions.map((p) => ({
-            medicine_id: p.medicine_id,
-            quantity: p.quantity,
-            unit_price: p.medicine?.price_per_unit || 0,
-          })),
-        };
+    try {
+      const dispensePayload = {
+        items: selectedPrescriptions.map((p) => ({
+          medicine_id: p.medicine_id,
+          quantity: p.quantity,
+          unit_price: p.medicine?.price_per_unit || 0,
+        })),
+      };
 
-        const dispenseResult = await submitPharmacyDispense(accessToken, visit.id, dispensePayload);
-        const totalDue = (dispenseResult.medicines_total || 0) + outstandingDebt;
+      const dispenseResult = await submitPharmacyDispense(accessToken, visit.id, dispensePayload);
+      const totalDue = (dispenseResult.medicines_total || 0) + outstandingDebt;
 
-        let cashAmount = 0;
-        let onlineAmount = 0;
-        let newDebt = 0;
-        let debtCleared = 0;
+      let cashAmount = 0;
+      let onlineAmount = 0;
+      let newDebt = 0;
+      let debtCleared = 0;
 
-        if (paymentMethod === 'cash') {
-          cashAmount = totalDue;
-          debtCleared = outstandingDebt;
-        } else if (paymentMethod === 'online') {
-          onlineAmount = totalDue;
-          debtCleared = outstandingDebt;
-        } else if (paymentMethod === 'split') {
-          const splitCash = Math.min(Math.max(splitCashAmount || 0, 0), totalDue);
-          cashAmount = splitCash;
-          onlineAmount = totalDue - splitCash;
-          debtCleared = outstandingDebt;
-        } else {
-          newDebt = totalDue;
-        }
-
-        const checkoutResult: PharmacyCheckoutResponse = await checkoutPharmacySession(accessToken, visit.id, {
-          method: paymentMethod,
-          cash_amount: cashAmount,
-          online_amount: onlineAmount,
-          debt_cleared: debtCleared,
-          new_debt: newDebt,
-        });
-
-        const invoiceNo = `INV-${checkoutResult.visit_id.slice(-8).toUpperCase()}`;
-        setCheckoutReceipt({
-          invoice_number: invoiceNo,
-          invoice_date: checkoutResult.visit_date,
-          payment_method: checkoutResult.payment.method,
-          medicines_total: checkoutResult.medicines_total,
-          total_charged: checkoutResult.payment.total_charged,
-          cash_amount: checkoutResult.payment.cash_amount,
-          online_amount: checkoutResult.payment.online_amount,
-          new_debt: checkoutResult.payment.new_debt,
-          debt_before: checkoutResult.debt_snapshot.debt_before,
-          debt_after: checkoutResult.debt_snapshot.debt_after,
-        });
-        setShowInvoice(true);
-        toast.success('Dispense and checkout completed successfully.');
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Checkout failed');
-      } finally {
-        setIsSubmitting(false);
+      if (paymentMethod === 'cash') {
+        cashAmount = totalDue;
+        debtCleared = outstandingDebt;
+      } else if (paymentMethod === 'online') {
+        onlineAmount = totalDue;
+        debtCleared = outstandingDebt;
+      } else if (paymentMethod === 'split') {
+        const splitCash = Math.min(Math.max(splitCashAmount || 0, 0), totalDue);
+        cashAmount = splitCash;
+        onlineAmount = totalDue - splitCash;
+        debtCleared = outstandingDebt;
+      } else {
+        newDebt = totalDue;
       }
-      return;
-    }
 
-    const totals = calculateTotals();
-
-    // Create invoice
-    const newInvoice: Invoice = {
-      id: generateId(),
-      visit_id: visit.id,
-      patient_id: patient.id,
-      invoice_number: generateInvoiceNumber(),
-      invoice_date: new Date().toISOString().split('T')[0],
-      consultation_fee: totals.consultationFee,
-      medicine_total: totals.medicineTotal,
-      discount: totals.discountAmount,
-      tax: totals.tax,
-      grand_total: totals.grandTotal,
-      payment_status: 'paid',
-      payment_method: paymentMethod,
-      created_at: new Date().toISOString(),
-    };
-
-    store.addInvoice(newInvoice);
-    setInvoice(newInvoice);
-
-    // Mark prescriptions as dispensed and update inventory
-    selectedPrescriptions.forEach((p) => {
-      store.updatePrescription(p.id, {
-        dispensed: true,
-        dispensed_at: new Date().toISOString(),
+      const checkoutResult: PharmacyCheckoutResponse = await checkoutPharmacySession(accessToken, visit.id, {
+        method: paymentMethod,
+        cash_amount: cashAmount,
+        online_amount: onlineAmount,
+        debt_cleared: debtCleared,
+        new_debt: newDebt,
       });
 
-      // Deduct from inventory
-      if (p.medicine) {
-        store.addInventoryTransaction({
-          id: generateId(),
-          medicine_id: p.medicine_id,
-          transaction_type: 'out',
-          quantity: p.quantity,
-          reference_id: p.id,
-          performed_by: user.id,
-          notes: `Dispensed for patient ${patient.full_name}`,
-          created_at: new Date().toISOString(),
-        });
-      }
-    });
-
-    // Update visit to completed
-    store.updateVisit(visit.id, {
-      current_stage: 'completed',
-      pharmacy_time: new Date().toISOString(),
-      completed_time: new Date().toISOString(),
-      pharmacist_id: user.id,
-      status: 'completed',
-    });
-
-    setIsSubmitting(false);
-    setShowInvoice(true);
-    toast.success('Medicines dispensed! Invoice generated.');
+      const invoiceNo = `INV-${checkoutResult.visit_id.slice(-8).toUpperCase()}`;
+      setCheckoutReceipt({
+        invoice_number: invoiceNo,
+        invoice_date: checkoutResult.visit_date,
+        payment_method: checkoutResult.payment.method,
+        medicines_total: checkoutResult.medicines_total,
+        total_charged: checkoutResult.payment.total_charged,
+        cash_amount: checkoutResult.payment.cash_amount,
+        online_amount: checkoutResult.payment.online_amount,
+        new_debt: checkoutResult.payment.new_debt,
+        debt_before: checkoutResult.debt_snapshot.debt_before,
+        debt_after: checkoutResult.debt_snapshot.debt_after,
+      });
+      setShowInvoice(true);
+      toast.success('Dispense and checkout completed successfully.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Checkout failed');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handlePrint = () => {
@@ -479,22 +376,14 @@ export default function DispensePage({ params }: { params: Promise<{ visitId: st
 
             <div className="mt-4 space-y-1 text-right text-sm">
               <p>Medicine Total: Rs. {(checkoutReceipt?.medicines_total ?? totals.medicineTotal).toFixed(2)}</p>
-              {useDemoData && totals.discountAmount > 0 && (
-                <p>Discount ({discount}%): -Rs. {totals.discountAmount.toFixed(2)}</p>
-              )}
-              {useDemoData && <p>GST (5%): Rs. {totals.tax.toFixed(2)}</p>}
-              {!useDemoData && (
-                <>
-                  <p>Outstanding Debt Before: Rs. {(checkoutReceipt?.debt_before ?? outstandingDebt).toFixed(2)}</p>
-                  <p>Paid in Cash: Rs. {(checkoutReceipt?.cash_amount ?? 0).toFixed(2)}</p>
-                  <p>Paid Online: Rs. {(checkoutReceipt?.online_amount ?? 0).toFixed(2)}</p>
-                  <p>New Debt Added: Rs. {(checkoutReceipt?.new_debt ?? 0).toFixed(2)}</p>
-                </>
-              )}
+              <p>Outstanding Debt Before: Rs. {(checkoutReceipt?.debt_before ?? outstandingDebt).toFixed(2)}</p>
+              <p>Paid in Cash: Rs. {(checkoutReceipt?.cash_amount ?? 0).toFixed(2)}</p>
+              <p>Paid Online: Rs. {(checkoutReceipt?.online_amount ?? 0).toFixed(2)}</p>
+              <p>New Debt Added: Rs. {(checkoutReceipt?.new_debt ?? 0).toFixed(2)}</p>
               <p className="text-lg font-bold pt-2 border-t">
                 Grand Total: Rs. {(checkoutReceipt?.total_charged ?? totals.grandTotal).toFixed(2)}
               </p>
-              {!useDemoData && <p>Outstanding Debt After: Rs. {(checkoutReceipt?.debt_after ?? outstandingDebt).toFixed(2)}</p>}
+              <p>Outstanding Debt After: Rs. {(checkoutReceipt?.debt_after ?? outstandingDebt).toFixed(2)}</p>
             </div>
 
             <div className="mt-6 pt-4 border-t text-center text-sm text-muted-foreground">
@@ -592,20 +481,7 @@ export default function DispensePage({ params }: { params: Promise<{ visitId: st
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
-                {(useDemoData || !accessToken) && (
-                  <div>
-                    <Label htmlFor="discount">Discount (%)</Label>
-                    <Input
-                      id="discount"
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={discount}
-                      onChange={(e) => setDiscount(parseInt(e.target.value) || 0)}
-                      placeholder="0"
-                    />
-                  </div>
-                )}
+
                 <div>
                   <Label htmlFor="payment">Payment Method</Label>
                   <Select
@@ -625,7 +501,7 @@ export default function DispensePage({ params }: { params: Promise<{ visitId: st
                 </div>
               </div>
 
-              {!useDemoData && paymentMethod === 'split' && (
+              {paymentMethod === 'split' && (
                 <div>
                   <Label htmlFor="splitCashAmount">Cash Amount (for split payment)</Label>
                   <Input
@@ -645,43 +521,17 @@ export default function DispensePage({ params }: { params: Promise<{ visitId: st
 
               {/* Totals */}
               <div className="pt-4 border-t space-y-2 text-sm">
-                {(useDemoData || !accessToken) && (
-                  <div className="flex justify-between">
-                    <span>Consultation Fee</span>
-                    <span>Rs. {totals.consultationFee.toFixed(2)}</span>
-                  </div>
-                )}
                 <div className="flex justify-between">
                   <span>Medicine Total</span>
                   <span>Rs. {totals.medicineTotal.toFixed(2)}</span>
                 </div>
-                {(useDemoData || !accessToken) && (
-                  <div className="flex justify-between">
-                    <span>Subtotal</span>
-                    <span>Rs. {totals.subtotal.toFixed(2)}</span>
-                  </div>
-                )}
-                {(useDemoData || !accessToken) && totals.discountAmount > 0 && (
-                  <div className="flex justify-between text-emerald-600">
-                    <span>Discount ({discount}%)</span>
-                    <span>-Rs. {totals.discountAmount.toFixed(2)}</span>
-                  </div>
-                )}
-                {(useDemoData || !accessToken) && (
-                  <div className="flex justify-between">
-                    <span>GST (5%)</span>
-                    <span>Rs. {totals.tax.toFixed(2)}</span>
-                  </div>
-                )}
-                {!useDemoData && (
-                  <div className="flex justify-between">
-                    <span>Outstanding Debt</span>
-                    <span>Rs. {outstandingDebt.toFixed(2)}</span>
-                  </div>
-                )}
+                <div className="flex justify-between">
+                  <span>Outstanding Debt</span>
+                  <span>Rs. {outstandingDebt.toFixed(2)}</span>
+                </div>
                 <div className="flex justify-between text-lg font-bold pt-2 border-t">
-                  <span>{useDemoData || !accessToken ? 'Grand Total' : 'Total Due'}</span>
-                  <span>Rs. {(useDemoData || !accessToken ? totals.grandTotal : totals.totalDue).toFixed(2)}</span>
+                  <span>Total Due</span>
+                  <span>Rs. {totals.totalDue.toFixed(2)}</span>
                 </div>
               </div>
             </CardContent>

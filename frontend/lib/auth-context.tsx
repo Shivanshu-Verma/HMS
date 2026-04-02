@@ -3,8 +3,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import type { User, UserRole } from './types';
 import { login as apiLogin } from './hms-api';
-import { store } from './demo-store';
-import { useDemoData } from './runtime-mode';
 
 interface AuthContextType {
   user: User | null;
@@ -16,14 +14,6 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-const demoPasswords: Record<string, string> = {
-  'admin@deaddiction.com': 'admin123',
-  'reception@deaddiction.com': 'reception123',
-  'counsellor@deaddiction.com': 'counsellor123',
-  'doctor@deaddiction.com': 'doctor123',
-  'pharmacy@deaddiction.com': 'pharmacy123',
-};
 
 function mapBackendRole(role: string): UserRole {
   if (role === 'receptionist') return 'reception';
@@ -45,16 +35,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Check for stored user and token on mount.
     if (typeof window !== 'undefined') {
       try {
-        const storedUser = localStorage.getItem(useDemoData ? 'demo_user' : 'hms_user');
+        const storedUser = localStorage.getItem('hms_user');
         const storedToken = localStorage.getItem('hms_access_token');
         if (storedUser) {
           setUser(JSON.parse(storedUser));
         }
-        if (!useDemoData && storedToken) {
+        if (storedToken) {
           setAccessToken(storedToken);
         }
       } catch {
-        localStorage.removeItem('demo_user');
         localStorage.removeItem('hms_user');
         localStorage.removeItem('hms_access_token');
       }
@@ -63,26 +52,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
-    if (useDemoData) {
-      const demoUser = store.getUserByEmail(email);
-      if (!demoUser) {
-        return { success: false, error: 'User not found' };
-      }
-      if (demoPasswords[email] !== password) {
-        return { success: false, error: 'Invalid password' };
-      }
-      if (!demoUser.is_active) {
-        return { success: false, error: 'Account is deactivated' };
-      }
-
-      setUser(demoUser);
-      setAccessToken(null);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('demo_user', JSON.stringify(demoUser));
-      }
-      return { success: true };
-    }
-
     try {
       const result = await apiLogin(email, password);
       const mappedUser: User = {
@@ -111,7 +80,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setAccessToken(null);
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('demo_user');
       localStorage.removeItem('hms_user');
       localStorage.removeItem('hms_access_token');
       window.location.href = '/login';
@@ -124,7 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, accessToken, login, logout, isDemo: useDemoData }}>
+    <AuthContext.Provider value={{ user, isLoading, accessToken, login, logout, isDemo: false }}>
       {children}
     </AuthContext.Provider>
   );

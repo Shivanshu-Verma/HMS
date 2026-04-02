@@ -5,10 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { store } from '@/lib/demo-store';
-import { getCounsellorFollowup, updatePatientStatus } from '@/lib/hms-api';
+import { getCounsellorFollowup, updatePatientStatus, getPatientsList } from '@/lib/hms-api';
 import { useAuth } from '@/lib/auth-context';
-import { useDemoData } from '@/lib/runtime-mode';
 import type { Patient, Visit, CounsellorSession } from '@/lib/types';
 import {
   PATIENT_CATEGORY_LABELS,
@@ -95,12 +93,71 @@ export default function CounsellorPatientsPage() {
   const [followupCount, setFollowupCount] = useState(0);
 
   useEffect(() => {
-    setPatients(store.getPatients());
-    if (!useDemoData && accessToken) {
-      getCounsellorFollowup(accessToken, 1, 1)
-        .then((res) => setFollowupCount(res.pagination.total))
-        .catch(() => setFollowupCount(0));
-    }
+    if (!accessToken) return;
+    getPatientsList(accessToken)
+      .then((data) => {
+        const mapped = data.items.map((item: any) => ({
+          id: item.id || item._id,
+          registration_number: item.registration_number || '',
+          patient_category: item.patient_category || 'deaddiction',
+          full_name: item.full_name || '',
+          date_of_birth: item.date_of_birth || item.dob || '',
+          gender: item.gender || item.sex || 'other',
+          phone: item.phone_number || item.phone || '',
+          address: item.address || '',
+          city: item.city || '',
+          state: item.state || '',
+          pincode: item.pincode || '',
+          addiction_type: item.addiction_type || 'other',
+          first_visit_date: item.registration_date || item.created_at || '',
+          emergency_contact_name: item.emergency_contact_name || '',
+          emergency_contact_phone: item.emergency_contact_phone || '',
+          emergency_contact_relation: item.emergency_contact_relation || '',
+          status: item.status || 'active',
+          created_at: item.created_at || new Date().toISOString(),
+          updated_at: item.updated_at || new Date().toISOString(),
+          hdams_id: item.hdams_id,
+          father_name: item.father_name,
+          mother_name: item.mother_name,
+          grandfather_name: item.grandfather_name,
+          spouse_name: item.spouse_name,
+          marital_status: item.marital_status,
+          education: item.education,
+          occupation: item.occupation,
+          employment_status: item.employment_status,
+          living_arrangement: item.living_arrangement,
+          monthly_income: item.monthly_income,
+          blood_group: item.blood_group,
+          aadhaar_number: item.aadhaar_number,
+          nationality: item.nationality,
+          religion: item.religion,
+          district: item.district,
+          block_mc: item.block_mc,
+          relative_phone: item.relative_phone,
+          substance_used_currently: item.substance_used_currently,
+          substance_ever_used: item.substance_ever_used,
+          injection_use_ever: item.injection_use_ever,
+          injection_use_currently: item.injection_use_currently,
+          syringe_sharing: item.syringe_sharing,
+          sti_std: item.sti_std,
+          hiv_screening: item.hiv_screening,
+          hiv_result: item.hiv_result,
+          comorbid_medical_illness: item.comorbid_medical_illness,
+          comorbid_psychiatric_illness: item.comorbid_psychiatric_illness,
+          previous_drug_treatment: item.previous_drug_treatment,
+          previous_treatments: item.previous_treatments,
+          ever_hospitalized: item.ever_hospitalized,
+          registration_date: item.registration_date,
+          allergies: item.allergies,
+          medical_history: item.medical_history,
+          addiction_duration: item.addiction_duration_text || item.addiction_duration,
+        } as Patient));
+        setPatients(mapped);
+      })
+      .catch(() => setPatients([]));
+    getCounsellorFollowup(accessToken, 1, 1)
+      .then((res) => setFollowupCount(res.pagination.total))
+      .catch(() => setFollowupCount(0));
   }, [accessToken]);
 
   const filteredPatients = useMemo(() => {
@@ -120,16 +177,9 @@ export default function CounsellorPatientsPage() {
 
   const handleSelectPatient = (patient: Patient) => {
     setSelectedPatient(patient);
-    const visits = store.getVisitsByPatient(patient.id).sort(
-      (a, b) => new Date(b.visit_date).getTime() - new Date(a.visit_date).getTime()
-    );
-    setPatientVisits(visits);
-
-    const sessions = store
-      .getSessions()
-      .filter((s) => s.patient_id === patient.id)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    setPatientSessions(sessions);
+    // In API mode, visits and sessions need dedicated endpoints
+    setPatientVisits([]);
+    setPatientSessions([]);
   };
 
   const handleOpenEdit = () => {
@@ -155,7 +205,7 @@ export default function CounsellorPatientsPage() {
   const handleSaveEdit = async () => {
     if (!editingPatient) return;
 
-    if (!useDemoData && accessToken && selectedPatient && editingPatient.status !== selectedPatient.status) {
+    if (accessToken && selectedPatient && editingPatient.status !== selectedPatient.status) {
       try {
         await updatePatientStatus(accessToken, editingPatient.id, editingPatient.status as 'active' | 'inactive' | 'dead');
       } catch (error) {
@@ -164,13 +214,11 @@ export default function CounsellorPatientsPage() {
       }
     }
 
-    const updated = store.updatePatient(editingPatient.id, editingPatient);
-    if (updated) {
-      setSelectedPatient(editingPatient);
-      setPatients(store.getPatients());
-      setIsEditOpen(false);
-      toast.success('Patient record updated successfully');
-    }
+    // Update local state
+    setPatients(prev => prev.map(p => p.id === editingPatient.id ? editingPatient : p));
+    setSelectedPatient(editingPatient);
+    setIsEditOpen(false);
+    toast.success('Patient record updated');
   };
 
   // ── Patient List View ──────────────────────────────────────────────────────

@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { store } from '@/lib/demo-store';
+import { useAuth } from '@/lib/auth-context';
+import { getDashboardStats, getQueueStatus, type QueueItem } from '@/lib/hms-api';
 import { navigate } from '@/lib/navigation';
 import type { DashboardStats, Patient, Visit } from '@/lib/types';
 import {
@@ -52,77 +53,42 @@ interface StatData {
 }
 
 export default function ReceptionDashboard() {
+  const { accessToken } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const [selectedStat, setSelectedStat] = useState<StatData | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [patientDetailOpen, setPatientDetailOpen] = useState(false);
 
   useEffect(() => {
-    setStats(store.getDashboardStats());
-  }, []);
+    if (!accessToken) return;
+    getDashboardStats(accessToken)
+      .then((data) => setStats(data))
+      .catch(() => setStats(null));
+    getQueueStatus(accessToken)
+      .then((data) => setQueueItems(data.items))
+      .catch(() => setQueueItems([]));
+  }, [accessToken]);
 
   const getStatData = (statType: string): StatData => {
-    const patients = store.getPatients();
-    const todayVisits = store.getTodayVisits();
-    
-    switch (statType) {
-      case 'total_patients':
-        return {
-          title: 'Total Patients',
-          description: 'All registered patients in the system',
-          patients: patients.map(p => ({ patient: p })),
-        };
-      case 'today_visits':
-        return {
-          title: "Today's Visits",
-          description: 'All patients who visited today',
-          patients: todayVisits.map(v => ({
-            patient: store.getPatientById(v.patient_id)!,
-            visit: v,
-          })).filter(p => p.patient),
-        };
-      case 'at_counsellor':
-        return {
-          title: 'At Counsellor',
-          description: 'Patients currently with the counsellor',
-          patients: store.getVisitsByStage('counsellor').map(v => ({
-            patient: store.getPatientById(v.patient_id)!,
-            visit: v,
-          })).filter(p => p.patient),
-        };
-      case 'at_doctor':
-        return {
-          title: 'At Doctor',
-          description: 'Patients currently with the doctor',
-          patients: store.getVisitsByStage('doctor').map(v => ({
-            patient: store.getPatientById(v.patient_id)!,
-            visit: v,
-          })).filter(p => p.patient),
-        };
-      case 'at_pharmacy':
-        return {
-          title: 'At Pharmacy',
-          description: 'Patients currently at the pharmacy',
-          patients: store.getVisitsByStage('pharmacy').map(v => ({
-            patient: store.getPatientById(v.patient_id)!,
-            visit: v,
-          })).filter(p => p.patient),
-        };
-      case 'completed_today':
-        return {
-          title: 'Completed Today',
-          description: 'Patients who completed their visit today',
-          patients: todayVisits
-            .filter(v => v.status === 'completed')
-            .map(v => ({
-              patient: store.getPatientById(v.patient_id)!,
-              visit: v,
-            })).filter(p => p.patient),
-        };
-      default:
-        return { title: '', description: '', patients: [] };
+    const stageMap: Record<string, { title: string; description: string; stage?: string }> = {
+      total_patients: { title: 'Total Patients', description: 'All registered patients' },
+      today_visits: { title: "Today's Visits", description: 'Patients who visited today' },
+      at_counsellor: { title: 'At Counsellor', description: 'Currently with counsellor', stage: 'counsellor' },
+      at_doctor: { title: 'At Doctor', description: 'Currently with doctor', stage: 'doctor' },
+      at_pharmacy: { title: 'At Pharmacy', description: 'Currently at pharmacy', stage: 'pharmacy' },
+      completed_today: { title: 'Completed Today', description: 'Completed visit today', stage: 'completed' },
+    };
+    const meta = stageMap[statType] || { title: '', description: '' };
+    let filtered = queueItems;
+    if (meta.stage) {
+      filtered = queueItems.filter(q => q.current_stage === meta.stage);
     }
+    const patientItems = filtered.map(q => ({
+      patient: { id: q.patient_id, full_name: q.patient_name, registration_number: '', phone: '', date_of_birth: '', gender: 'male' as const, status: 'active' as const } as Patient,
+    }));
+    return { title: meta.title, description: meta.description, patients: patientItems };
   };
 
   const handleStatClick = (statType: string) => {
@@ -330,39 +296,38 @@ export default function ReceptionDashboard() {
         <CardContent className="p-0">
           {stats && stats.todayVisits > 0 ? (
             <div className="divide-y">
-              {store.getTodayVisits().slice(0, 5).map((visit) => {
-                const patient = store.getPatientById(visit.patient_id);
-                if (!patient) return null;
+              {queueItems.slice(0, 5).map((q) => {
+                if (!q.patient_name) return null;
                 return (
                   <div
-                    key={visit.id}
+                    key={q.session_id}
                     className="flex items-center justify-between p-4 hover:bg-muted/30 transition-colors"
                   >
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
                         <span className="text-sm font-semibold text-primary">
-                          {patient.full_name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                          {q.patient_name.split(' ').map(n => n[0]).join('').slice(0, 2)}
                         </span>
                       </div>
                       <div>
-                        <p className="font-medium">{patient.full_name}</p>
+                        <p className="font-medium">{q.patient_name}</p>
                         <p className="text-sm text-muted-foreground">
-                          {patient.registration_number} - Checked in at{' '}
-                          {visit.checkin_time
-                            ? new Date(visit.checkin_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+                          Checked in at{' '}
+                          {q.checked_in_at
+                            ? new Date(q.checked_in_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
                             : 'N/A'}
                         </p>
                       </div>
                     </div>
                     <span className={`text-sm px-3 py-1 rounded-full font-medium capitalize
-                      ${visit.current_stage === 'completed' ? 'bg-emerald-100 text-emerald-700' :
-                        visit.current_stage === 'counsellor' ? 'bg-amber-100 text-amber-700' :
-                        visit.current_stage === 'doctor' ? 'bg-indigo-100 text-indigo-700' :
-                        visit.current_stage === 'pharmacy' ? 'bg-rose-100 text-rose-700' :
+                      ${q.current_stage === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                        q.current_stage === 'counsellor' ? 'bg-amber-100 text-amber-700' :
+                        q.current_stage === 'doctor' ? 'bg-indigo-100 text-indigo-700' :
+                        q.current_stage === 'pharmacy' ? 'bg-rose-100 text-rose-700' :
                         'bg-secondary text-secondary-foreground'
                       }`}
                     >
-                      {visit.current_stage}
+                      {q.current_stage}
                     </span>
                   </div>
                 );

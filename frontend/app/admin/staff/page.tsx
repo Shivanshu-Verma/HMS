@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useDemoStore } from "@/lib/demo-store";
+// Staff management needs dedicated backend endpoints
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,7 +36,9 @@ import { toast } from "sonner";
 import type { UserRole } from "@/lib/types";
 
 export default function StaffManagement() {
-  const { staff, addStaff } = useDemoStore();
+  // Staff management needs dedicated backend API endpoints 
+  const staff: any[] = [];
+  const addStaff = (_data: any) => { toast.error('Staff management requires backend API endpoints'); };
   const [isAddingStaff, setIsAddingStaff] = useState(false);
   const [newStaff, setNewStaff] = useState({
     name: "",

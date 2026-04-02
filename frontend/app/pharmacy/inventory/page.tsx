@@ -40,8 +40,6 @@ import {
   Package,
   AlertTriangle,
 } from 'lucide-react';
-import { store } from '@/lib/demo-store';
-import { useDemoData } from '@/lib/runtime-mode';
 
 const LOW_STOCK_THRESHOLD = 20;
 
@@ -97,30 +95,14 @@ export default function InventoryPage() {
     }));
   };
 
-  const mapDemoMedicines = (items: Medicine[]): InventoryMedicineItem[] => {
-    return items.map((item) => ({
-      id: item.id,
-      name: item.name,
-      category: item.category || 'general',
-      manufacturer: item.manufacturer,
-      unit: item.unit,
-      unit_price: item.price_per_unit,
-      stock_quantity: item.stock_quantity,
-      is_active: item.is_active,
-    }));
-  };
-
   const loadInventory = () => {
-    if (useDemoData || !accessToken) {
-      setMedicines(mapDemoMedicines(store.getMedicines()));
-      return;
-    }
+    if (!accessToken) return;
 
     getInventory(accessToken)
       .then((res) => {
         setMedicines(mapInventoryItems(res.items || []));
       })
-      .catch(() => setMedicines(mapDemoMedicines(store.getMedicines())));
+      .catch(() => setMedicines([]));
   };
 
   useEffect(() => {
@@ -141,10 +123,6 @@ export default function InventoryPage() {
   });
 
   const handleAddMedicine = () => {
-    if (useDemoData || !accessToken) {
-      toast.error('Backend mode is disabled. Enable API mode to mutate inventory.');
-      return;
-    }
     if (!accessToken) {
       toast.error('Please sign in again');
       return;
@@ -181,10 +159,6 @@ export default function InventoryPage() {
   };
 
   const handleAddStock = () => {
-    if (useDemoData || !accessToken) {
-      toast.error('Backend mode is disabled. Enable API mode to mutate inventory.');
-      return;
-    }
     if (!accessToken) {
       toast.error('Please sign in again');
       return;
@@ -428,7 +402,7 @@ export default function InventoryPage() {
                     </TableCell>
                     <TableCell>{med.category || '-'}</TableCell>
                     <TableCell className="capitalize">{med.unit}</TableCell>
-                    <TableCell className="text-right">Rs. {(med.price_per_unit || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right">Rs. {(med.unit_price || 0).toFixed(2)}</TableCell>
                     <TableCell className="text-right">{med.stock_quantity}</TableCell>
                     <TableCell>
                       <StockBadge quantity={med.stock_quantity} reorderLevel={LOW_STOCK_THRESHOLD} />

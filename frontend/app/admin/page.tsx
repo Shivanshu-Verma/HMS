@@ -1,6 +1,9 @@
 "use client";
 
-import { useDemoStore } from "@/lib/demo-store";
+import { useEffect, useState } from 'react';
+import { useAuth } from '@/lib/auth-context';
+import { getPatientsList, getDashboardStats } from '@/lib/hms-api';
+import type { Patient, Visit, Medicine } from '@/lib/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PatientFlowTracker } from "@/components/patient-flow-tracker";
@@ -17,36 +20,65 @@ import {
 } from "lucide-react";
 
 export default function AdminDashboard() {
-  const store = useDemoStore();
-  const patients = store.getPatients();
-  const visits = store.getVisits();
-  const medicines = store.getMedicines();
-  const invoices = store.getInvoices();
-  const users = store.getUsers();
+  const { accessToken } = useAuth();
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [visits, setVisits] = useState<Visit[]>([]);
+  const [medicines, setMedicines] = useState<Medicine[]>([]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    getPatientsList(accessToken)
+      .then((data) => {
+        const mapped = data.items.map((item: any) => ({
+          id: item.id || item._id,
+          registration_number: item.registration_number || '',
+          patient_category: item.patient_category || 'deaddiction',
+          full_name: item.full_name || '',
+          date_of_birth: item.date_of_birth || item.dob || '',
+          gender: item.gender || 'other',
+          phone: item.phone_number || item.phone || '',
+          address: item.address || '',
+          city: item.city || '',
+          state: item.state || '',
+          pincode: item.pincode || '',
+          addiction_type: item.addiction_type || 'other',
+          first_visit_date: item.registration_date || '',
+          emergency_contact_name: item.emergency_contact_name || '',
+          emergency_contact_phone: item.emergency_contact_phone || '',
+          emergency_contact_relation: item.emergency_contact_relation || '',
+          status: item.status || 'active',
+          created_at: item.created_at || new Date().toISOString(),
+          updated_at: item.updated_at || new Date().toISOString(),
+        } as Patient));
+        setPatients(mapped);
+      })
+      .catch(() => setPatients([]));
+  }, [accessToken]);
 
   const today = new Date().toISOString().split("T")[0];
   const todayVisits = visits.filter((v) => v.visit_date === today);
   const completedToday = todayVisits.filter((v) => v.status === "completed").length;
   const inProgressToday = todayVisits.filter((v) => v.status === "in_progress").length;
 
-  const totalRevenue = invoices.reduce((sum, inv) => sum + inv.grand_total, 0);
-  const todayRevenue = invoices
-    .filter((inv) => inv.invoice_date === today)
-    .reduce((sum, inv) => sum + inv.grand_total, 0);
+  const totalRevenue = 0;
+  const todayRevenue = 0;
 
-  const lowStockMedicines = store.getLowStockMedicines();
-  const expiringMedicines = medicines.filter((m) => {
+  const lowStockMedicines: Medicine[] = [];
+  const expiringMedicines = medicines.filter((m: any) => {
+    if (!m.expiry_date) return false;
     const expiryDate = new Date(m.expiry_date);
     const thirtyDaysFromNow = new Date();
     thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
     return expiryDate <= thirtyDaysFromNow;
   });
 
+  const users: any[] = [];
+
   const staffByRole = {
-    reception: users.filter((s) => s.role === "reception").length,
-    counsellor: users.filter((s) => s.role === "counsellor").length,
-    doctor: users.filter((s) => s.role === "doctor").length,
-    pharmacist: users.filter((s) => s.role === "pharmacist").length,
+    reception: users.filter((s: any) => s.role === "reception").length,
+    counsellor: users.filter((s: any) => s.role === "counsellor").length,
+    doctor: users.filter((s: any) => s.role === "doctor").length,
+    pharmacist: users.filter((s: any) => s.role === "pharmacist").length,
   };
 
   const statCards = [

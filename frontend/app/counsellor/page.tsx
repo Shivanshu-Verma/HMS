@@ -4,10 +4,8 @@ import { useEffect, useState } from 'react';
 import { navigate } from '@/lib/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { store } from '@/lib/demo-store';
 import { getCounsellorQueue } from '@/lib/hms-api';
 import { useAuth } from '@/lib/auth-context';
-import { useDemoData } from '@/lib/runtime-mode';
 import type { Visit, Patient } from '@/lib/types';
 import { PatientQueueItem } from '@/components/patient-card';
 import {
@@ -38,34 +36,8 @@ export default function CounsellorDashboard() {
   const [queue, setQueue] = useState<VisitWithPatient[]>([]);
   const [todayCompleted, setTodayCompleted] = useState(0);
 
-  const loadDemoQueue = () => {
-    const counsellorQueue = store
-      .getVisitsByStage('counsellor')
-      .map((visit) => ({
-        ...visit,
-        patient: store.getPatientById(visit.patient_id)!,
-      }))
-      .filter((v) => v.patient)
-      .sort((a, b) => {
-        const timeA = a.checkin_time ? new Date(a.checkin_time).getTime() : 0;
-        const timeB = b.checkin_time ? new Date(b.checkin_time).getTime() : 0;
-        return timeA - timeB;
-      });
-
-    setQueue(counsellorQueue);
-
-    const today = new Date().toISOString().split('T')[0];
-    const completed = store
-      .getSessions()
-      .filter((s) => s.created_at.startsWith(today)).length;
-    setTodayCompleted(completed);
-  };
-
   useEffect(() => {
-    if (useDemoData || !accessToken) {
-      loadDemoQueue();
-      return;
-    }
+    if (!accessToken) return;
 
     getCounsellorQueue(accessToken)
       .then((res) => {
@@ -101,7 +73,7 @@ export default function CounsellorDashboard() {
         }));
         setQueue(mapped);
       })
-      .catch(() => loadDemoQueue());
+      .catch(() => setQueue([]));
 
     setTodayCompleted(0);
   }, [accessToken]);

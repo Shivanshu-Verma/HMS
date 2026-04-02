@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { store } from '@/lib/demo-store';
 import type { Invoice, Patient } from '@/lib/types';
 import { PaymentBadge } from '@/components/status-badge';
 import { Search, FileText, Calendar } from 'lucide-react';
@@ -17,16 +16,8 @@ export default function InvoicesPage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const allInvoices = store
-      .getInvoices()
-      .map((invoice) => ({
-        ...invoice,
-        patient: store.getPatientById(invoice.patient_id)!,
-      }))
-      .filter((i) => i.patient)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-    setInvoices(allInvoices);
+    // Invoice history needs a dedicated backend endpoint
+    setInvoices([]);
   }, []);
 
   const filteredInvoices = invoices.filter((invoice) => {

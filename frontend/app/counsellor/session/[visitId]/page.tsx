@@ -8,10 +8,8 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { store, generateId } from '@/lib/demo-store';
 import { useAuth } from '@/lib/auth-context';
 import { completeCounsellorSession, getCounsellorSessionDetail } from '@/lib/hms-api';
-import { useDemoData } from '@/lib/runtime-mode';
 import type { Visit, Patient, CounsellorSession, RiskLevel } from '@/lib/types';
 import { PatientCard } from '@/components/patient-card';
 import { RiskBadge } from '@/components/status-badge';
@@ -53,23 +51,7 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
   }, [params]);
 
   useEffect(() => {
-    if (!visitId) return;
-    if (useDemoData || !accessToken) {
-      const visitData = store.getVisitById(visitId);
-      if (visitData) {
-        setVisit(visitData);
-        const patientData = store.getPatientById(visitData.patient_id);
-        if (patientData) {
-          setPatient(patientData);
-        }
-
-        store.updateVisit(visitId, {
-          counsellor_start_time: new Date().toISOString(),
-          assigned_counsellor_id: user?.id,
-        });
-      }
-      return;
-    }
+    if (!visitId || !accessToken) return;
 
     getCounsellorSessionDetail(accessToken, visitId)
       .then((res) => {
@@ -126,49 +108,23 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
     // Calculate session duration
     const durationMinutes = Math.round((Date.now() - sessionStartTime) / 60000);
 
-    if (!useDemoData && accessToken) {
-      try {
-        await completeCounsellorSession(accessToken, visit.id, {
-          session_notes: formData.session_notes,
-          mood_assessment: formData.mood_assessment,
-          risk_level: formData.risk_level,
-          recommendations: formData.recommendations || undefined,
-          follow_up_required: formData.follow_up_required,
-        });
-        toast.success('Session completed and forwarded to doctor queue.');
-        window.location.href = '/counsellor';
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Failed to submit session');
-      } finally {
-        setIsSubmitting(false);
-      }
-      return;
+    if (!accessToken) return;
+
+    try {
+      await completeCounsellorSession(accessToken, visit.id, {
+        session_notes: formData.session_notes,
+        mood_assessment: formData.mood_assessment,
+        risk_level: formData.risk_level,
+        recommendations: formData.recommendations || undefined,
+        follow_up_required: formData.follow_up_required,
+      });
+      toast.success('Session completed and forwarded to doctor queue.');
+      window.location.href = '/counsellor';
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to submit session');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    const session: CounsellorSession = {
-      id: generateId(),
-      visit_id: visit.id,
-      patient_id: patient.id,
-      counsellor_id: user.id,
-      session_notes: formData.session_notes,
-      mood_assessment: formData.mood_assessment,
-      risk_level: formData.risk_level,
-      recommendations: formData.recommendations || undefined,
-      follow_up_required: formData.follow_up_required,
-      session_duration_minutes: Math.max(1, durationMinutes),
-      created_at: new Date().toISOString(),
-    };
-
-    store.addSession(session);
-
-    store.updateVisit(visit.id, {
-      current_stage: 'doctor',
-      counsellor_end_time: new Date().toISOString(),
-    });
-
-    setIsSubmitting(false);
-    toast.success('Session completed! Patient moved to doctor queue.');
-    window.location.href = '/counsellor';
   };
 
   if (!visit || !patient) {
@@ -179,11 +135,8 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
     );
   }
 
-  // Get previous sessions for this patient
-  const previousSessions = store
-    .getSessions()
-    .filter((s) => s.patient_id === patient.id)
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  // Previous sessions — not available in API mode, would need a dedicated endpoint
+  const previousSessions: CounsellorSession[] = [];
 
   return (
     <div className="space-y-6">

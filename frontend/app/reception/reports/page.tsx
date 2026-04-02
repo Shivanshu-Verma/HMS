@@ -1,12 +1,10 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { store } from '@/lib/demo-store';
 import type { Patient, Visit, PatientCategory } from '@/lib/types';
 import { PATIENT_CATEGORY_LABELS } from '@/lib/types';
 import { getReceptionReports } from '@/lib/hms-api';
 import { useAuth } from '@/lib/auth-context';
-import { useDemoData } from '@/lib/runtime-mode';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -67,14 +65,10 @@ export default function ReportsPage() {
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
 
   useEffect(() => {
-    setPatients(store.getPatients());
-    setVisits(store.getVisits());
-
-    if (!useDemoData && accessToken) {
-      getReceptionReports(accessToken)
-        .then((data) => setBackendReports(data))
-        .catch(() => setBackendReports(null));
-    }
+    if (!accessToken) return;
+    getReceptionReports(accessToken)
+      .then((data) => setBackendReports(data))
+      .catch(() => setBackendReports(null));
   }, [accessToken]);
 
   // Get visits with patient data

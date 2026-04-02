@@ -7,10 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { store } from '@/lib/demo-store';
 import { getCounsellorReports, type CounsellorReportsResponse } from '@/lib/hms-api';
 import { useAuth } from '@/lib/auth-context';
-import { useDemoData } from '@/lib/runtime-mode';
 import { PATIENT_CATEGORY_LABELS } from '@/lib/types';
 import type { Patient, Visit, CounsellorSession } from '@/lib/types';
 import {
@@ -46,19 +44,10 @@ export default function CounsellorReportsPage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
 
   useEffect(() => {
-    const allSessions = store.getSessions().map(session => ({
-      ...session,
-      patient: store.getPatientById(session.patient_id),
-      visit: store.getVisitById(session.visit_id),
-    }));
-    setSessions(allSessions);
-    setPatients(store.getPatients());
-
-    if (!useDemoData && accessToken) {
-      getCounsellorReports(accessToken)
-        .then((data) => setBackendReports(data))
-        .catch(() => setBackendReports(null));
-    }
+    if (!accessToken) return;
+    getCounsellorReports(accessToken)
+      .then((data) => setBackendReports(data))
+      .catch(() => setBackendReports(null));
   }, [accessToken]);
 
   // Daily Report Data

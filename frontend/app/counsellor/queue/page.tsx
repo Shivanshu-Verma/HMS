@@ -3,10 +3,8 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { store } from '@/lib/demo-store';
 import { getCounsellorQueue } from '@/lib/hms-api';
 import { useAuth } from '@/lib/auth-context';
-import { useDemoData } from '@/lib/runtime-mode';
 import type { Visit, Patient } from '@/lib/types';
 import { PatientCard } from '@/components/patient-card';
 import { Users, Play } from 'lucide-react';
@@ -28,28 +26,8 @@ export default function CounsellorQueuePage() {
   const { accessToken } = useAuth();
   const [queue, setQueue] = useState<VisitWithPatient[]>([]);
 
-  const loadDemoQueue = () => {
-    const counsellorQueue = store
-      .getVisitsByStage('counsellor')
-      .map((visit) => ({
-        ...visit,
-        patient: store.getPatientById(visit.patient_id)!,
-      }))
-      .filter((v) => v.patient)
-      .sort((a, b) => {
-        const timeA = a.checkin_time ? new Date(a.checkin_time).getTime() : 0;
-        const timeB = b.checkin_time ? new Date(b.checkin_time).getTime() : 0;
-        return timeA - timeB;
-      });
-
-    setQueue(counsellorQueue);
-  };
-
   useEffect(() => {
-    if (useDemoData || !accessToken) {
-      loadDemoQueue();
-      return;
-    }
+    if (!accessToken) return;
 
     getCounsellorQueue(accessToken)
       .then((res) => {
@@ -85,7 +63,7 @@ export default function CounsellorQueuePage() {
         }));
         setQueue(mapped);
       })
-      .catch(() => loadDemoQueue());
+      .catch(() => setQueue([]));
   }, [accessToken]);
 
   const handleStartSession = (visitId: string) => {
