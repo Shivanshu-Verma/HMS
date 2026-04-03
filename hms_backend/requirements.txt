@@ -6,4 +6,5 @@ pymongo==4.10.1
 django-cors-headers==4.6.0
 python-decouple==3.8
 PyJWT==2.10.1
+cryptography==44.0.1
 gunicorn==25.3.0

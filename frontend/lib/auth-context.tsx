@@ -1,15 +1,16 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { registerAuthFailureHandler } from './api-client';
+import { getSession, login as apiLogin, logout as apiLogout } from './hms-api';
 import type { User, UserRole } from './types';
-import { login as apiLogin } from './hms-api';
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   accessToken: string | null;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; user?: User }>;
+  logout: () => Promise<void>;
   isDemo: boolean;
 }
 
@@ -23,76 +24,119 @@ function mapBackendRole(role: string): UserRole {
   return 'reception';
 }
 
+function mapBackendUser(user: {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+}): User {
+  return {
+    id: user.id,
+    email: user.email,
+    full_name: user.full_name,
+    role: mapBackendRole(user.role),
+    is_active: true,
+    created_at: new Date().toISOString(),
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
     setIsMounted(true);
-    
-    // Check for stored user and token on mount.
-    if (typeof window !== 'undefined') {
+  }, []);
+
+  useEffect(() => {
+    if (!isMounted) {
+      return;
+    }
+
+    registerAuthFailureHandler(() => {
+      setUser(null);
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    });
+
+    return () => {
+      registerAuthFailureHandler(null);
+    };
+  }, [isMounted]);
+
+  useEffect(() => {
+    if (!isMounted) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const bootstrapSession = async () => {
       try {
-        const storedUser = localStorage.getItem('hms_user');
-        const storedToken = localStorage.getItem('hms_access_token');
-        if (storedUser) {
-          setUser(JSON.parse(storedUser));
-        }
-        if (storedToken) {
-          setAccessToken(storedToken);
+        const result = await getSession();
+        if (!cancelled) {
+          setUser(mapBackendUser(result.user));
         }
       } catch {
-        localStorage.removeItem('hms_user');
-        localStorage.removeItem('hms_access_token');
+        if (!cancelled) {
+          setUser(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
-    }
-    setIsLoading(false);
-  }, []);
+    };
+
+    void bootstrapSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isMounted]);
 
   const login = async (email: string, password: string) => {
     try {
       const result = await apiLogin(email, password);
-      const mappedUser: User = {
-        id: result.user.id,
-        email: result.user.email,
-        full_name: result.user.full_name,
-        role: mapBackendRole(result.user.role),
-        is_active: true,
-        created_at: new Date().toISOString(),
-      };
-
+      const mappedUser = mapBackendUser(result.user);
       setUser(mappedUser);
-      setAccessToken(result.access_token);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('hms_user', JSON.stringify(mappedUser));
-        localStorage.setItem('hms_access_token', result.access_token);
-      }
-      return { success: true };
+      return { success: true, user: mappedUser };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Login failed';
       return { success: false, error: message };
     }
   };
 
-  const logout = () => {
-    setUser(null);
-    setAccessToken(null);
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('hms_user');
-      localStorage.removeItem('hms_access_token');
-      window.location.href = '/login';
+  const logout = async () => {
+    try {
+      await apiLogout();
+    } catch {
+      // Clearing local in-memory auth state is sufficient for the client redirect.
+    } finally {
+      setUser(null);
+      if (typeof window !== 'undefined') {
+        window.location.href = '/login';
+      }
     }
   };
 
-  // Don't render children until mounted to prevent hydration mismatch
   if (!isMounted) {
     return null;
   }
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, accessToken, login, logout, isDemo: false }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        isLoading,
+        accessToken: user ? '__cookie_session__' : null,
+        login,
+        logout,
+        isDemo: false,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

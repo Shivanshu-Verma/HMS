@@ -26,7 +26,12 @@ from apps.patients.serializers import (
     PatientRegistrationSerializer,
     serialize_patient,
 )
-from utils.exceptions import NotFoundError
+from utils.exceptions import HMSError, NotFoundError
+from utils.fingerprint import (
+    decrypt_fingerprint_template,
+    encrypt_fingerprint_template,
+    hash_fingerprint_template,
+)
 from utils.response import success_response
 
 
@@ -54,6 +59,28 @@ def _recalculate_general_data_complete(patient: Patient) -> bool:
         if not _is_filled(payload.get(field)):
             return False
     return True
+
+
+def _mark_fingerprint_reenrollment_if_needed(patient: Patient) -> None:
+    """
+    Mark legacy biometric records as requiring re-enrollment.
+
+    Args:
+        patient (Patient): Patient document to normalize.
+    """
+    biometric = patient.biometric
+    if not biometric:
+        return
+
+    has_encrypted_template = bool(getattr(biometric, 'fingerprint_template_encrypted', None))
+    has_legacy_hash = bool(getattr(biometric, 'legacy_fingerprint_hash_sha256', None))
+
+    if has_encrypted_template or not has_legacy_hash or biometric.fingerprint_reenrollment_required:
+        return
+
+    biometric.fingerprint_reenrollment_required = True
+    patient.updated_at = datetime.datetime.utcnow()
+    patient.save()
 
 
 class RegisterPatientView(APIView):
@@ -95,9 +122,11 @@ class RegisterPatientView(APIView):
             gender=data['sex'],
             aadhaar_number_last4=aadhaar_last4,
             biometric=Biometric(
-                fingerprint_hash_sha256=data['fingerprint_hash'],
-                fingerprint_hash_version='sha256-v1',
+                fingerprint_template_encrypted=encrypt_fingerprint_template(data['fingerprint_template']),
+                fingerprint_template_sha256=hash_fingerprint_template(data['fingerprint_template']),
+                fingerprint_template_key_version='fernet-v1',
                 fingerprint_enrolled_at=now,
+                fingerprint_reenrollment_required=False,
             ),
             general_data_complete=False,
             status='active',
@@ -193,11 +222,12 @@ class GetPatientView(APIView):
             patient = Patient.objects.get(id=ObjectId(patient_id))
         except Patient.DoesNotExist:
             raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        _mark_fingerprint_reenrollment_if_needed(patient)
         return success_response(serialize_patient(patient))
 
 
 class PatientLookupView(APIView):
-    """Lookup patient by registration number or fingerprint hash for check-in."""
+    """Lookup patient by registration number for check-in."""
 
     permission_classes = [IsReceptionist]
 
@@ -208,19 +238,64 @@ class PatientLookupView(APIView):
 
         hospital_id = ObjectId(request.user.hospital_id)
 
-        patient = None
-        if query.get('registration_number'):
-            patient = Patient.objects(
-                hospital_id=hospital_id,
-                registration_number=query['registration_number'],
-            ).first()
-        elif query.get('fingerprint_hash'):
-            patient = Patient.objects(
-                hospital_id=hospital_id,
-                biometric__fingerprint_hash_sha256=query['fingerprint_hash'],
-            ).first()
+        patient = Patient.objects(
+            hospital_id=hospital_id,
+            registration_number=query['registration_number'],
+        ).first()
 
         if not patient:
             raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
 
+        _mark_fingerprint_reenrollment_if_needed(patient)
         return success_response(serialize_patient(patient))
+
+
+class FingerprintTemplateView(APIView):
+    """Return a decrypted fingerprint template for receptionist-only verification."""
+
+    permission_classes = [IsReceptionist]
+
+    def get(self, request, patient_id):
+        """
+        Return the decrypted template for a selected patient.
+
+        Args:
+            request: DRF request.
+            patient_id (str): Target patient ObjectId string.
+
+        Returns:
+            Response: Decrypted fingerprint template payload.
+
+        Raises:
+            NotFoundError: If the patient does not exist.
+            HMSError: If the patient must re-enroll or has no decryptable template.
+        """
+        try:
+            patient = Patient.objects.get(id=ObjectId(patient_id))
+        except Patient.DoesNotExist:
+            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+
+        _mark_fingerprint_reenrollment_if_needed(patient)
+        biometric = patient.biometric
+
+        if not biometric or biometric.fingerprint_reenrollment_required:
+            raise HMSError(
+                code='FINGERPRINT_REENROLLMENT_REQUIRED',
+                message='This patient must re-enroll fingerprint biometrics before verification.',
+                status_code=409,
+            )
+
+        encrypted_template = getattr(biometric, 'fingerprint_template_encrypted', None)
+        if not encrypted_template:
+            raise HMSError(
+                code='FINGERPRINT_TEMPLATE_UNAVAILABLE',
+                message='No fingerprint template is available for this patient.',
+                status_code=404,
+            )
+
+        return success_response({
+            'patient_id': str(patient.id),
+            'fingerprint_template': decrypt_fingerprint_template(encrypted_template),
+            'fingerprint_enrolled_at': biometric.fingerprint_enrolled_at.isoformat() if biometric.fingerprint_enrolled_at else None,
+            'fingerprint_template_key_version': biometric.fingerprint_template_key_version,
+        })

@@ -57,9 +57,13 @@ class MedicalBackground(EmbeddedDocument):
 class Biometric(EmbeddedDocument):
     """Biometric fingerprint metadata — stores only the SHA-256 hash, never raw data."""
 
-    fingerprint_hash_sha256 = StringField(required=True)
-    fingerprint_hash_version = StringField(required=True, default='sha256-v1')
+    fingerprint_template_encrypted = StringField()
+    fingerprint_template_sha256 = StringField()
+    fingerprint_template_key_version = StringField(default='fernet-v1')
     fingerprint_enrolled_at = DateTimeField(required=True)
+    fingerprint_reenrollment_required = BooleanField(default=False)
+    legacy_fingerprint_hash_sha256 = StringField(db_field='fingerprint_hash_sha256')
+    legacy_fingerprint_hash_version = StringField(db_field='fingerprint_hash_version')
 
 
 class StatusUpdate(EmbeddedDocument):
@@ -261,7 +265,7 @@ class Patient(Document):
     addiction_profile = EmbeddedDocumentField(AddictionProfile, required=False)
     emergency_contact = EmbeddedDocumentField(EmergencyContact, required=False)
     medical_background = EmbeddedDocumentField(MedicalBackground, required=False)
-    biometric = EmbeddedDocumentField(Biometric, required=True)
+    biometric = EmbeddedDocumentField(Biometric, required=False)
     status = StringField(required=True, default='active', choices=('active', 'inactive', 'dead'))
     general_data_complete = BooleanField(default=False)
     outstanding_debt = FloatField(default=0.0, min_value=0.0)
@@ -280,7 +284,7 @@ class Patient(Document):
         'indexes': [
             {'fields': ['hospital_id', 'patient_uid'], 'unique': True},
             {'fields': ['hospital_id', 'registration_number'], 'unique': True},
-            {'fields': ['hospital_id', 'biometric.fingerprint_hash_sha256'], 'unique': True, 'sparse': True},
+            {'fields': ['hospital_id', 'biometric.fingerprint_template_sha256'], 'unique': True, 'sparse': True},
             {'fields': ['hospital_id', 'phone']},
             {'fields': ['hospital_id', 'status', '-updated_at']},
             {'fields': ['status']},

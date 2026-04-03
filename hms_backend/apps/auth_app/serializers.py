@@ -11,15 +11,3 @@ class LoginSerializer(serializers.Serializer):
 
     email = serializers.EmailField(required=True, help_text="Staff email address.")
     password = serializers.CharField(required=True, help_text="Account password.")
-
-
-class RefreshSerializer(serializers.Serializer):
-    """Validates refresh token request."""
-
-    refresh_token = serializers.CharField(required=True, help_text="Current refresh token.")
-
-
-class LogoutSerializer(serializers.Serializer):
-    """Validates logout request."""
-
-    refresh_token = serializers.CharField(required=False, help_text="Refresh token to revoke.")

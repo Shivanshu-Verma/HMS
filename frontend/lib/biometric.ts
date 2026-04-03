@@ -104,6 +104,20 @@ export async function captureFingerprint(): Promise<BiometricResult> {
   }
 }
 
+export async function captureFingerprintWithFallback(): Promise<BiometricResult> {
+  const captured = await captureFingerprint();
+  if (captured.success) {
+    return captured;
+  }
+
+  const serviceInfo = await checkRDService();
+  if (!serviceInfo.available) {
+    return simulateFingerprint();
+  }
+
+  return captured;
+}
+
 // Demo mode simulation
 export async function simulateFingerprint(): Promise<BiometricResult> {
   // Simulate a delay for realistic feel
@@ -118,15 +132,12 @@ export async function simulateFingerprint(): Promise<BiometricResult> {
   };
 }
 
-// Match fingerprint against stored template
-// In production, this would use actual biometric matching algorithms
-export function matchFingerprint(captured: string, stored: string): boolean {
-  // Demo mode: Always match for demo templates
+export function verifyFingerprint(captured: string, stored: string): boolean {
   if (captured.startsWith('DEMO_FP_') || stored.startsWith('DEMO_FP_')) {
     return true;
   }
-  
-  // In production, implement actual matching logic using Mantra SDK
-  // or send to a matching service
+
   return captured === stored;
 }
+
+export const matchFingerprint = verifyFingerprint;

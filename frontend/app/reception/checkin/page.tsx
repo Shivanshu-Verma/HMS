@@ -7,8 +7,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { checkinPatient, lookupPatient } from '@/lib/hms-api';
-import { checkRDService, simulateFingerprint, type RDServiceInfo } from '@/lib/biometric';
+import { checkinPatient, getPatientFingerprintTemplate, lookupPatient } from '@/lib/hms-api';
+import {
+  captureFingerprintWithFallback,
+  checkRDService,
+  type RDServiceInfo,
+  verifyFingerprint,
+} from '@/lib/biometric';
 import { navigate } from '@/lib/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { toast } from 'sonner';
@@ -115,15 +120,33 @@ export default function CheckinPage() {
     setIsScanning(true);
     setVerificationStep('verify');
     
-    // Simulate fingerprint capture and verification
-    const result = await simulateFingerprint();
+    const storedTemplate = await getPatientFingerprintTemplate(selectedPatient.id).catch((error) => {
+      toast.error(error instanceof Error ? error.message : 'Stored fingerprint is unavailable');
+      return null;
+    });
+
+    if (!storedTemplate) {
+      setVerificationStep('confirm');
+      setIsScanning(false);
+      return;
+    }
+
+    const result = await captureFingerprintWithFallback();
     
     if (result.success) {
-      // In demo mode, simulate successful verification
-      // In production, this would match against stored fingerprint template
-      setBiometricVerified(true);
-      setVerificationStep('verified');
-      toast.success('Fingerprint verified successfully!');
+      const matched = verifyFingerprint(
+        result.data || '',
+        storedTemplate.fingerprint_template,
+      );
+
+      if (matched) {
+        setBiometricVerified(true);
+        setVerificationStep('verified');
+        toast.success('Fingerprint verified successfully!');
+      } else {
+        toast.error('Fingerprint does not match the selected patient.');
+        setVerificationStep('confirm');
+      }
     } else {
       toast.error(result.error || 'Fingerprint verification failed');
       setVerificationStep('confirm');

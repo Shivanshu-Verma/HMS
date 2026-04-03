@@ -12,6 +12,7 @@ pymongo = "==4.10.1"
 django-cors-headers = "==4.6.0"
 python-decouple = "==3.8"
 pyjwt = "==2.10.1"
+cryptography = "==44.0.1"
 
 [dev-packages]
 

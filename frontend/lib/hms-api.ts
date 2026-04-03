@@ -11,9 +11,11 @@ export interface AuthUser {
 }
 
 export interface LoginResponse {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
+  expires_in: number;
+  user: AuthUser;
+}
+
+export interface SessionResponse {
   expires_in: number;
   user: AuthUser;
 }
@@ -36,8 +38,29 @@ export interface PatientLookupResponse {
   relative_phone?: string | null;
   addiction_duration_text?: string | null;
   addiction_duration?: string | null;
+  fingerprint_reenrollment_required?: boolean;
   [key: string]: unknown;
 }
+
+export interface FingerprintTemplateResponse {
+  patient_id: string;
+  fingerprint_template: string;
+  fingerprint_enrolled_at?: string | null;
+  fingerprint_template_key_version?: string | null;
+}
+
+type RegisterPatientTier1Payload = {
+  patient_category?: PatientCategory;
+  file_number?: string;
+  full_name: string;
+  phone_number: string;
+  date_of_birth: string;
+  sex: "male" | "female" | "other";
+  fingerprint_template: string;
+  aadhaar_number?: string;
+  relative_phone?: string;
+  address_line1?: string;
+};
 
 export interface CheckinResponse {
   session_id: string;
@@ -199,94 +222,117 @@ export async function login(
   return apiRequest<LoginResponse>("/api/v1/auth/login/", {
     method: "POST",
     body: { email, password },
+    retryOn401: false,
+    suppressAuthRedirect: true,
+  });
+}
+
+export async function getSession(): Promise<SessionResponse> {
+  return apiRequest<SessionResponse>("/api/v1/auth/session/", {
+    suppressAuthRedirect: true,
+  });
+}
+
+export async function logout(): Promise<{ logged_out: boolean }> {
+  return apiRequest<{ logged_out: boolean }>("/api/v1/auth/logout/", {
+    method: "POST",
+    suppressAuthRedirect: true,
   });
 }
 
 export async function registerPatientTier1(
-  token: string,
-  payload: {
-    patient_category?: PatientCategory;
-    file_number?: string;
-    full_name: string;
-    phone_number: string;
-    date_of_birth: string;
-    sex: "male" | "female" | "other";
-    fingerprint_hash: string;
-    aadhaar_number?: string;
-    relative_phone?: string;
-    address_line1?: string;
-  },
+  payloadOrToken: RegisterPatientTier1Payload | string,
+  maybePayload?: RegisterPatientTier1Payload,
 ): Promise<PatientLookupResponse> {
+  const payload = typeof payloadOrToken === "string" ? maybePayload : payloadOrToken;
   return apiRequest<PatientLookupResponse>("/api/v1/patients/register/", {
     method: "POST",
-    token,
     body: payload,
   });
 }
 
 export async function lookupPatient(
-  token: string,
-  query: { registration_number?: string; fingerprint_hash?: string },
+  queryOrToken: { registration_number?: string } | string,
+  maybeQuery?: { registration_number?: string },
 ): Promise<PatientLookupResponse> {
+  const query = typeof queryOrToken === "string" ? maybeQuery ?? {} : queryOrToken;
   const params = new URLSearchParams();
   if (query.registration_number)
     params.set("registration_number", query.registration_number);
-  if (query.fingerprint_hash)
-    params.set("fingerprint_hash", query.fingerprint_hash);
   return apiRequest<PatientLookupResponse>(
     `/api/v1/patients/lookup/?${params.toString()}`,
-    {
-      token,
-    },
+    {},
   );
 }
 
 export async function checkinPatient(
-  token: string,
-  patient_id: string,
+  patientIdOrToken: string,
+  maybePatientId?: string,
 ): Promise<CheckinResponse> {
+  const patient_id = maybePatientId ?? patientIdOrToken;
   return apiRequest<CheckinResponse>("/api/v1/sessions/checkin/", {
     method: "POST",
-    token,
     body: { patient_id },
   });
 }
 
+export async function getPatientFingerprintTemplate(
+  patientIdOrToken: string,
+  maybePatientId?: string,
+): Promise<FingerprintTemplateResponse> {
+  const patientId = maybePatientId ?? patientIdOrToken;
+  return apiRequest<FingerprintTemplateResponse>(
+    `/api/v1/patients/${patientId}/fingerprint-template/`,
+    {},
+  );
+}
+
 export async function getCounsellorFollowup(
-  token: string,
-  page = 1,
-  pageSize = 20,
+  pageOrToken: number | string = 1,
+  maybePage = 1,
+  maybePageSize = 20,
 ): Promise<{
   items: FollowupItem[];
   pagination: { page: number; pageSize: number; total: number };
 }> {
+  const page = typeof pageOrToken === "string" ? maybePage : pageOrToken;
+  const pageSize = typeof pageOrToken === "string" ? maybePageSize : maybePage;
   return apiRequest(
     `/api/v1/counsellor/followup/?page=${page}&pageSize=${pageSize}`,
-    { token },
+    {},
   );
 }
 
-export async function getCounsellorQueue(token: string) {
+export async function getCounsellorQueue(_token?: string) {
   return apiRequest<{ items: CounsellorQueueItem[]; total: number }>(
     "/api/v1/counsellor/queue/",
-    { token },
+    {},
   );
 }
 
 export async function getCounsellorSessionDetail(
-  token: string,
-  sessionId: string,
+  sessionIdOrToken: string,
+  maybeSessionId?: string,
 ) {
+  const sessionId = maybeSessionId ?? sessionIdOrToken;
   return apiRequest<CounsellorSessionDetailResponse>(
     `/api/v1/counsellor/session/${sessionId}/`,
-    { token },
+    {},
   );
 }
 
 export async function completeCounsellorSession(
-  token: string,
-  sessionId: string,
-  payload: {
+  sessionIdOrToken: string,
+  payloadOrSessionId:
+    | {
+        session_notes: string;
+        mood_assessment?: number;
+        risk_level: "low" | "medium" | "high";
+        recommendations?: string;
+        follow_up_required?: boolean;
+      }
+    | string,
+  maybePayload?: {
     session_notes: string;
     mood_assessment?: number;
     risk_level: "low" | "medium" | "high";
@@ -294,35 +340,36 @@ export async function completeCounsellorSession(
     follow_up_required?: boolean;
   },
 ) {
+  const sessionId = typeof payloadOrSessionId === "string" ? payloadOrSessionId : sessionIdOrToken;
+  const payload = typeof payloadOrSessionId === "string" ? maybePayload : payloadOrSessionId;
   return apiRequest(`/api/v1/counsellor/session/${sessionId}/complete/`, {
     method: "POST",
-    token,
     body: payload,
   });
 }
 
 export async function updatePatientStatus(
-  token: string,
-  patientId: string,
-  status: "active" | "inactive" | "dead",
+  patientIdOrToken: string,
+  statusOrPatientId: "active" | "inactive" | "dead" | string,
+  maybeStatus?: "active" | "inactive" | "dead",
 ): Promise<{ patient_id: string; full_name: string; status: string }> {
+  const patientId = maybeStatus ? statusOrPatientId : patientIdOrToken;
+  const status = maybeStatus ?? (statusOrPatientId as "active" | "inactive" | "dead");
   return apiRequest(`/api/v1/counsellor/patients/${patientId}/status/`, {
     method: "PATCH",
-    token,
     body: { status },
   });
 }
 
-export async function getCounsellorReports(token: string) {
-  return apiRequest<CounsellorReportsResponse>("/api/v1/counsellor/reports/", {
-    token,
-  });
+export async function getCounsellorReports(_token?: string) {
+  return apiRequest<CounsellorReportsResponse>("/api/v1/counsellor/reports/", {});
 }
 
 export async function getCounsellorPatientsList(
-  token: string,
-  opts: { q?: string; page?: number; pageSize?: number } = {},
+  optsOrToken: { q?: string; page?: number; pageSize?: number } | string = {},
+  maybeOpts: { q?: string; page?: number; pageSize?: number } = {},
 ) {
+  const opts = typeof optsOrToken === "string" ? maybeOpts : optsOrToken;
   const params = new URLSearchParams();
   if (opts.q) params.set("q", opts.q);
   params.set("page", String(opts.page ?? 1));
@@ -330,51 +377,65 @@ export async function getCounsellorPatientsList(
   return apiRequest<{
     items: PatientLookupResponse[];
     pagination?: { page: number; pageSize: number; total: number };
-  }>(`/api/v1/counsellor/patients/?${params.toString()}`, { token });
+  }>(`/api/v1/counsellor/patients/?${params.toString()}`, {});
 }
 
-export async function getReceptionReports(token: string) {
-  return apiRequest("/api/v1/receptionist/reports/", { token });
+export async function getReceptionReports(_token?: string) {
+  return apiRequest("/api/v1/receptionist/reports/", {});
 }
 
-export async function getPharmacyQueue(token: string) {
+export async function getPharmacyQueue(_token?: string) {
   return apiRequest<{ items: PharmacyQueueItem[]; total: number }>(
     "/api/v1/pharmacy/queue/",
-    { token },
+    {},
   );
 }
 
 export async function getPharmacySessionDetail(
-  token: string,
-  sessionId: string,
+  sessionIdOrToken: string,
+  maybeSessionId?: string,
 ) {
+  const sessionId = maybeSessionId ?? sessionIdOrToken;
   return apiRequest<PharmacySessionDetailResponse>(
     `/api/v1/pharmacy/session/${sessionId}/`,
-    { token },
+    {},
   );
 }
 
 export async function submitPharmacyDispense(
-  token: string,
-  sessionId: string,
-  payload: {
+  sessionIdOrToken: string,
+  payloadOrSessionId:
+    | {
+        items: Array<{ medicine_id: string; quantity: number; unit_price: number }>;
+      }
+    | string,
+  maybePayload?: {
     items: Array<{ medicine_id: string; quantity: number; unit_price: number }>;
   },
 ) {
+  const sessionId = typeof payloadOrSessionId === "string" ? payloadOrSessionId : sessionIdOrToken;
+  const payload = typeof payloadOrSessionId === "string" ? maybePayload : payloadOrSessionId;
   return apiRequest<PharmacyDispenseResponse>(
     `/api/v1/pharmacy/session/${sessionId}/dispense/`,
     {
       method: "POST",
-      token,
       body: payload,
     },
   );
 }
 
 export async function checkoutPharmacySession(
-  token: string,
-  sessionId: string,
-  payment: {
+  sessionIdOrToken: string,
+  paymentOrSessionId:
+    | {
+        method: PharmacyPaymentMethod;
+        cash_amount?: number;
+        online_amount?: number;
+        debt_cleared?: number;
+        new_debt?: number;
+      }
+    | string,
+  maybePayment?: {
     method: PharmacyPaymentMethod;
     cash_amount?: number;
     online_amount?: number;
@@ -382,24 +443,25 @@ export async function checkoutPharmacySession(
     new_debt?: number;
   },
 ) {
+  const sessionId = typeof paymentOrSessionId === "string" ? paymentOrSessionId : sessionIdOrToken;
+  const payment = typeof paymentOrSessionId === "string" ? maybePayment : paymentOrSessionId;
   return apiRequest<PharmacyCheckoutResponse>(
     `/api/v1/pharmacy/session/${sessionId}/checkout/`,
     {
       method: "POST",
-      token,
       body: { payment },
     },
   );
 }
 
-export async function getPharmacyReports(token: string) {
-  return apiRequest("/api/v1/pharmacy/reports/", { token });
+export async function getPharmacyReports(_token?: string) {
+  return apiRequest("/api/v1/pharmacy/reports/", {});
 }
 
 export async function getPharmacyInvoices(
-  token: string,
-  opts: { q?: string; page?: number; pageSize?: number } = {}
+  optsOrToken: { q?: string; page?: number; pageSize?: number } | string = {}
 ) {
+  const opts = typeof optsOrToken === "string" ? {} : optsOrToken;
   const params = new URLSearchParams();
   if (opts.q) params.set('q', opts.q);
   params.set('page', String(opts.page ?? 1));
@@ -423,13 +485,14 @@ export async function getPharmacyInvoices(
       };
     }>;
     pagination: { page: number; pageSize: number; total: number; hasNextPage: boolean };
-  }>(`/api/v1/pharmacy/invoices/?${params.toString()}`, { token });
+  }>(`/api/v1/pharmacy/invoices/?${params.toString()}`, {});
 }
 
 export async function searchPharmacyMedicines(
-  token: string,
-  opts: { q?: string; page?: number; pageSize?: number } = {},
+  optsOrToken: { q?: string; page?: number; pageSize?: number } | string = {},
+  maybeOpts: { q?: string; page?: number; pageSize?: number } = {},
 ) {
+  const opts = typeof optsOrToken === "string" ? maybeOpts : optsOrToken;
   const params = new URLSearchParams();
   if (opts.q) params.set("q", opts.q);
   params.set("page", String(opts.page ?? 1));
@@ -437,18 +500,26 @@ export async function searchPharmacyMedicines(
   return apiRequest<{
     items: PharmacyMedicineSearchItem[];
     pagination: { page: number; pageSize: number; total: number };
-  }>(`/api/v1/pharmacy/medicines/search/?${params.toString()}`, { token });
+  }>(`/api/v1/pharmacy/medicines/search/?${params.toString()}`, {});
 }
 
 export async function getInventory(
-  token: string,
-  opts: {
+  optsOrToken:
+    | {
+        q?: string;
+        category?: string;
+        page?: number;
+        pageSize?: number;
+      }
+    | string = {},
+  maybeOpts: {
     q?: string;
     category?: string;
     page?: number;
     pageSize?: number;
   } = {},
 ) {
+  const opts = typeof optsOrToken === "string" ? maybeOpts : optsOrToken;
   const params = new URLSearchParams();
   if (opts.q) params.set("q", opts.q);
   if (opts.category) params.set("category", opts.category);
@@ -457,12 +528,21 @@ export async function getInventory(
   return apiRequest<{
     items: PharmacyInventoryItemResponse[];
     pagination: { page: number; pageSize: number; total: number };
-  }>(`/api/v1/pharmacy/inventory/?${params.toString()}`, { token });
+  }>(`/api/v1/pharmacy/inventory/?${params.toString()}`, {});
 }
 
 export async function addMedicine(
-  token: string,
-  payload: {
+  payloadOrToken:
+    | {
+        name: string;
+        category: string;
+        unit: MedicineUnit;
+        unit_price: number;
+        stock_quantity: number;
+        description?: string;
+      }
+    | string,
+  maybePayload?: {
     name: string;
     category: string;
     unit: MedicineUnit;
@@ -471,21 +551,22 @@ export async function addMedicine(
     description?: string;
   },
 ) {
+  const payload = typeof payloadOrToken === "string" ? maybePayload : payloadOrToken;
   return apiRequest("/api/v1/pharmacy/inventory/", {
     method: "POST",
-    token,
     body: payload,
   });
 }
 
 export async function addMedicineStock(
-  token: string,
-  medicineId: string,
-  quantity_to_add: number,
+  medicineIdOrToken: string,
+  quantityOrMedicineId: number | string,
+  maybeQuantity?: number,
 ) {
+  const medicineId = typeof quantityOrMedicineId === "string" ? quantityOrMedicineId : medicineIdOrToken;
+  const quantity_to_add = typeof quantityOrMedicineId === "string" ? maybeQuantity : quantityOrMedicineId;
   return apiRequest(`/api/v1/pharmacy/inventory/${medicineId}/stock/`, {
     method: "POST",
-    token,
     body: { quantity_to_add },
   });
 }
@@ -502,12 +583,10 @@ export interface DashboardStatsResponse {
   revenue: number;
 }
 
-export async function getDashboardStats(
-  token: string,
-): Promise<DashboardStatsResponse> {
+export async function getDashboardStats(_token?: string): Promise<DashboardStatsResponse> {
   const raw = await apiRequest<Partial<DashboardStatsResponse>>(
     "/api/v1/receptionist/dashboard/",
-    { token },
+    {},
   );
   return {
     totalPatients: raw.totalPatients ?? 0,
@@ -533,18 +612,19 @@ export interface QueueItem {
   outstanding_debt: number;
 }
 
-export async function getQueueStatus(token: string) {
+export async function getQueueStatus(_token?: string) {
   return apiRequest<{ items: QueueItem[]; total: number }>(
     "/api/v1/receptionist/queue/",
-    { token },
+    {},
   );
 }
 
 // ── Reception: Patient list (paginated, searchable) ──
 export async function getPatientsList(
-  token: string,
-  opts: { q?: string; page?: number; pageSize?: number } = {},
+  optsOrToken: { q?: string; page?: number; pageSize?: number } | string = {},
+  maybeOpts: { q?: string; page?: number; pageSize?: number } = {},
 ) {
+  const opts = typeof optsOrToken === "string" ? maybeOpts : optsOrToken;
   const params = new URLSearchParams();
   if (opts.q) params.set("q", opts.q);
   params.set("page", String(opts.page ?? 1));
@@ -552,11 +632,15 @@ export async function getPatientsList(
   return apiRequest<{
     items: PatientLookupResponse[];
     pagination?: { page: number; pageSize: number; total: number };
-  }>(`/api/v1/receptionist/patients/?${params.toString()}`, { token });
+  }>(`/api/v1/receptionist/patients/?${params.toString()}`, {});
 }
 
 // ── Patient visit history ──
-export async function getPatientVisits(token: string, patientId: string) {
+export async function getPatientVisits(
+  patientIdOrToken: string,
+  maybePatientId?: string,
+) {
+  const patientId = maybePatientId ?? patientIdOrToken;
   return apiRequest<{
     items: Array<{
       id: string;
@@ -565,5 +649,5 @@ export async function getPatientVisits(token: string, patientId: string) {
       visit_type: string;
       medicines_total: number;
     }>;
-  }>(`/api/v1/patients/${patientId}/visits/`, { token });
+  }>(`/api/v1/patients/${patientId}/visits/`, {});
 }

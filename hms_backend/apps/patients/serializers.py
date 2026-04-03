@@ -9,7 +9,7 @@ class PatientRegistrationSerializer(serializers.Serializer):
     phone_number = serializers.CharField(required=True)
     date_of_birth = serializers.DateField(required=True)
     sex = serializers.ChoiceField(choices=['male', 'female', 'other'], required=True)
-    fingerprint_hash = serializers.CharField(required=True)
+    fingerprint_template = serializers.CharField(required=True)
     patient_category = serializers.ChoiceField(
         choices=['psychiatric', 'deaddiction'],
         required=False,
@@ -48,14 +48,13 @@ class PatientGeneralDataSerializer(serializers.Serializer):
 
 
 class PatientLookupSerializer(serializers.Serializer):
-    """Query payload for patient lookup by registration or fingerprint."""
+    """Query payload for patient lookup by registration number."""
 
-    registration_number = serializers.CharField(required=False)
-    fingerprint_hash = serializers.CharField(required=False)
+    registration_number = serializers.CharField(required=True)
 
     def validate(self, attrs):
-        if not attrs.get('registration_number') and not attrs.get('fingerprint_hash'):
-            raise serializers.ValidationError('Either registration_number or fingerprint_hash is required.')
+        if not attrs.get('registration_number'):
+            raise serializers.ValidationError('registration_number is required.')
         return attrs
 
 
@@ -87,6 +86,7 @@ def serialize_patient(patient_doc) -> dict:
     addiction = patient_doc.addiction_profile
     emergency = patient_doc.emergency_contact
     medical = patient_doc.medical_background
+    biometric = patient_doc.biometric
 
     return {
         'patient_id': str(patient_doc.id),
@@ -122,6 +122,9 @@ def serialize_patient(patient_doc) -> dict:
         'allergies': medical.allergies if medical else None,
         'current_medications': medical.current_medications if medical else None,
         'previous_treatments': medical.previous_treatments if medical else None,
+        'fingerprint_reenrollment_required': bool(
+            biometric and getattr(biometric, 'fingerprint_reenrollment_required', False)
+        ),
     }
 
 

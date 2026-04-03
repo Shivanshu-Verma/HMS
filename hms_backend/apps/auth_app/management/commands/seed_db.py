@@ -18,6 +18,7 @@ from apps.patients.models import (
     Staff,
 )
 from apps.sessions.models import ActiveSession
+from utils.fingerprint import encrypt_fingerprint_template, hash_fingerprint_template
 
 
 HOSPITAL_ID = ObjectId(settings.DEFAULT_HOSPITAL_ID)
@@ -43,7 +44,7 @@ MEDICINES_DATA = [
 
 PATIENTS = [
     {
-        'fingerprint_hash': 'seed-fp-active-complete',
+        'fingerprint_template': 'seed-fp-active-complete',
         'full_name': 'Ramesh Patel',
         'phone': '9988776655',
         'date_of_birth': datetime.datetime(1985, 3, 15),
@@ -55,7 +56,7 @@ PATIENTS = [
         'aadhaar_last4': '4321',
     },
     {
-        'fingerprint_hash': 'seed-fp-active-debt',
+        'fingerprint_template': 'seed-fp-active-debt',
         'full_name': 'Arun Mehta',
         'phone': '9876501234',
         'date_of_birth': datetime.datetime(1990, 7, 22),
@@ -67,7 +68,7 @@ PATIENTS = [
         'aadhaar_last4': '8765',
     },
     {
-        'fingerprint_hash': 'seed-fp-dead',
+        'fingerprint_template': 'seed-fp-dead',
         'full_name': 'Kavita Sharma',
         'phone': '9876509876',
         'date_of_birth': datetime.datetime(1978, 11, 8),
@@ -79,7 +80,7 @@ PATIENTS = [
         'aadhaar_last4': '1234',
     },
     {
-        'fingerprint_hash': 'seed-fp-incomplete',
+        'fingerprint_template': 'seed-fp-incomplete',
         'full_name': 'Incomplete Profile',
         'phone': '9000000001',
         'date_of_birth': datetime.datetime(1995, 1, 1),
@@ -154,7 +155,7 @@ class Command(BaseCommand):
         for index, row in enumerate(PATIENTS, start=1):
             existing = Patient.objects(
                 hospital_id=HOSPITAL_ID,
-                biometric__fingerprint_hash_sha256=row['fingerprint_hash'],
+                biometric__fingerprint_template_sha256=hash_fingerprint_template(row['fingerprint_template']),
             ).first()
             if existing:
                 continue
@@ -169,9 +170,11 @@ class Command(BaseCommand):
                 date_of_birth=row['date_of_birth'],
                 gender=row['sex'],
                 biometric=Biometric(
-                    fingerprint_hash_sha256=row['fingerprint_hash'],
-                    fingerprint_hash_version='sha256-v1',
+                    fingerprint_template_encrypted=encrypt_fingerprint_template(row['fingerprint_template']),
+                    fingerprint_template_sha256=hash_fingerprint_template(row['fingerprint_template']),
+                    fingerprint_template_key_version=settings.FINGERPRINT_TEMPLATE_KEY_VERSION,
                     fingerprint_enrolled_at=now,
+                    fingerprint_reenrollment_required=False,
                 ),
                 status=row['status'],
                 outstanding_debt=row['outstanding_debt'],
@@ -213,7 +216,7 @@ class Command(BaseCommand):
         # Find the first active, complete patient with no outstanding debt
         patient = Patient.objects(
             hospital_id=HOSPITAL_ID,
-            biometric__fingerprint_hash_sha256='seed-fp-active-complete',
+            biometric__fingerprint_template_sha256=hash_fingerprint_template('seed-fp-active-complete'),
         ).first()
 
         if not patient:

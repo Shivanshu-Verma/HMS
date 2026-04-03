@@ -30,10 +30,8 @@ export default function LoginPage() {
 
     const result = await login(email, password);
     
-    if (result.success) {
-      const raw = typeof window !== 'undefined' ? localStorage.getItem('hms_user') : null;
-      const parsed = raw ? JSON.parse(raw) : null;
-      const role = parsed?.role || 'reception';
+    if (result.success && result.user) {
+      const role = result.user.role || 'reception';
       window.location.href = roleRoutes[role as keyof typeof roleRoutes] || '/reception';
     } else {
       setError(result.error || 'Login failed');

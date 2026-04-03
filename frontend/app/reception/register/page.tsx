@@ -22,7 +22,7 @@ function generateRegistrationNumber(): string {
     .padStart(4, "0");
   return `${prefix}${year}${random}`;
 }
-import { simulateFingerprint } from "@/lib/biometric";
+import { captureFingerprintWithFallback } from "@/lib/biometric";
 import type { Gender, PatientCategory } from "@/lib/types";
 import { PATIENT_CATEGORY_LABELS } from "@/lib/types";
 import { registerPatientTier1 } from "@/lib/hms-api";
@@ -128,7 +128,7 @@ export default function RegisterPatientPage() {
 
   const handleCaptureFingerprint = async () => {
     setIsCapturingFingerprint(true);
-    const result = await simulateFingerprint();
+    const result = await captureFingerprintWithFallback();
 
     if (result.success && result.data) {
       setInstantFormData({
@@ -270,7 +270,7 @@ export default function RegisterPatientPage() {
         phone_number: instantFormData.phone,
         date_of_birth: instantFormData.date_of_birth,
         sex: instantFormData.sex,
-        fingerprint_hash:
+        fingerprint_template:
           instantFormData.fingerprint_template || `manual-${Date.now()}`,
         aadhaar_number: aadhaarDigits || undefined,
         relative_phone: instantFormData.relative_phone,

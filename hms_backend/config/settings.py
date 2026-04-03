@@ -33,7 +33,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
     'django.middleware.common.CommonMiddleware',
 ]
 
@@ -70,15 +72,44 @@ if _cors_raw.strip() == '*':
 else:
     CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_raw.split(',') if o.strip()]
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='http://localhost:3000',
+    cast=Csv(),
+)
 
 # JWT Configuration
 JWT_SECRET_KEY = config('JWT_SECRET_KEY', default=SECRET_KEY)
 JWT_ACCESS_TOKEN_LIFETIME_MINUTES = config('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', default=60, cast=int)
 JWT_REFRESH_TOKEN_LIFETIME_DAYS = config('JWT_REFRESH_TOKEN_LIFETIME_DAYS', default=7, cast=int)
 JWT_ALGORITHM = 'HS256'
+JWT_ACCESS_COOKIE_NAME = config('JWT_ACCESS_COOKIE_NAME', default='hms_access_token')
+JWT_REFRESH_COOKIE_NAME = config('JWT_REFRESH_COOKIE_NAME', default='hms_refresh_token')
+JWT_COOKIE_SECURE = config('JWT_COOKIE_SECURE', default=False, cast=bool)
+JWT_COOKIE_SAMESITE = config('JWT_COOKIE_SAMESITE', default='Lax')
+JWT_COOKIE_DOMAIN = config('JWT_COOKIE_DOMAIN', default='')
+JWT_REFRESH_COOKIE_PATH = '/api/v1/auth/refresh/'
+
+CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=False, cast=bool)
+CSRF_COOKIE_SAMESITE = JWT_COOKIE_SAMESITE
+CSRF_COOKIE_DOMAIN = JWT_COOKIE_DOMAIN or None
+CSRF_COOKIE_HTTPONLY = False
+
+SESSION_COOKIE_SECURE = JWT_COOKIE_SECURE
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
 
 # Default hospital ID for single-tenant deployment
 DEFAULT_HOSPITAL_ID = config('DEFAULT_HOSPITAL_ID', default='000000000000000000000001')
+FINGERPRINT_TEMPLATE_ENCRYPTION_KEY = config(
+    'FINGERPRINT_TEMPLATE_ENCRYPTION_KEY',
+    default='',
+)
+FINGERPRINT_TEMPLATE_KEY_VERSION = config(
+    'FINGERPRINT_TEMPLATE_KEY_VERSION',
+    default='fernet-v1',
+)
 
 # HMS domain constants
 FOLLOWUP_THRESHOLD_DAYS = 30

@@ -1,0 +1,15 @@
+auth cookies: 
+Backend should handle cookie logic and checking middlewares. Best practices to be followed for security. 
+Currently implemented using JWT tokens stored in localStorage., change to cookies. 
+
+fingerprint:
+the device used for fingerprint expects a fingerprint template from the computer connected, unencrypted. 
+then it checks if the fingerprint provided by the user is same as fingerprint template. 
+currently we are hashing and storing this template, but the device expects unencrypted template.
+
+generating registration number logic, check if it checks unique or not. Make sure it does
+
+test and check all frontend data is logically coming from db, and not predefined (dummy/demo data)
+
+check all api endpoints working as expected, and all data is logically coming from db, and not predefined (dummy/demo data)
+(create script that uses all apis)

@@ -4,7 +4,6 @@ Custom DRF authentication and permission classes for the HMS backend.
 Provides JWT-based authentication that validates tokens against the blacklist,
 and role-based permission classes for each staff role.
 """
-import datetime
 import logging
 
 import jwt
@@ -68,12 +67,15 @@ class JWTAuthentication(BaseAuthentication):
         Raises:
             AuthenticationFailed: If the token is invalid, expired, or blacklisted.
         """
-        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        token = request.COOKIES.get(settings.JWT_ACCESS_COOKIE_NAME)
 
-        if not auth_header.startswith('Bearer '):
+        if not token:
+            auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:]
+
+        if not token:
             return None
-
-        token = auth_header[7:]  # Strip 'Bearer ' prefix
 
         try:
             payload = jwt.decode(
