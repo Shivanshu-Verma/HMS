@@ -19,6 +19,7 @@ from apps.pharmacy.services import PaymentValidator
 from apps.sessions.archive_service import ArchiveService
 from apps.sessions.models import ActiveSession, DispenseItem as ActiveDispenseItem
 from utils.exceptions import ConflictError, NotFoundError, ValidationError
+from utils.pagination import parse_pagination_params, paginate_queryset
 from utils.response import success_response
 
 
@@ -265,6 +266,7 @@ class PharmacyDebtPaymentView(APIView):
         visit = Visit(
             hospital_id=patient.hospital_id,
             visit_uid=f"DEBT-{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+            invoice_number=f"INV-{str(ObjectId())[-8:].upper()}",
             visit_type='debt_payment',
             patient_id=patient.id,
             visit_date=datetime.datetime.utcnow(),
@@ -399,11 +401,15 @@ class PharmacyReportsView(APIView):
     permission_classes = [IsPharmacy]
 
     def get(self, request):
-        pharmacist_id = ObjectId(request.user.id)
+        hospital_id = ObjectId(request.user.hospital_id)
         now = datetime.datetime.utcnow()
         today = now.date()
 
-        visits = Visit.objects(dispensed_by=pharmacist_id)
+        visits = Visit.objects(
+            hospital_id=hospital_id,
+            visit_type__in=['standard', 'debt_payment'],
+            dispensed_by__exists=True,
+        )
 
         day_stats = defaultdict(lambda: {'count': 0, 'revenue': 0.0, 'cash': 0.0, 'online': 0.0, 'debt_added': 0.0, 'debt_cleared': 0.0})
         for visit in visits:
@@ -462,6 +468,85 @@ class PharmacyReportsView(APIView):
                     'breakdown': yearly_breakdown,
                     'total_transactions': yearly_transactions,
                     'total_revenue': yearly_revenue,
+                },
+            }
+        )
+
+
+class PharmacyInvoicesView(APIView):
+    """Return paginated pharmacy invoice history for the hospital."""
+
+    permission_classes = [IsPharmacy]
+
+    def get(self, request):
+        hospital_id = ObjectId(request.user.hospital_id)
+        page, page_size = parse_pagination_params(request)
+        q = request.query_params.get('q', '').strip().lower()
+
+        visits_qs = Visit.objects(
+            hospital_id=hospital_id,
+            visit_type__in=['standard', 'debt_payment'],
+            dispensed_by__exists=True,
+        ).order_by('-visit_date')
+
+        items, total, has_next = paginate_queryset(visits_qs, page, page_size)
+
+        patient_ids = [v.patient_id for v in items if getattr(v, 'patient_id', None)]
+        patient_map = {p.id: p for p in Patient.objects(id__in=patient_ids)} if patient_ids else {}
+
+        invoices = []
+        for visit in items:
+            payment = getattr(visit, 'payment', None)
+            payment_method = getattr(payment, 'method', None) or 'cash'
+            cash_amount = float(getattr(payment, 'cash_amount', 0.0) or 0.0)
+            online_amount = float(getattr(payment, 'online_amount', 0.0) or 0.0)
+            total_charged = float(getattr(payment, 'total_charged', 0.0) or 0.0)
+
+            patient = patient_map.get(visit.patient_id)
+            patient_name = patient.full_name if patient else 'Unknown'
+            registration_number = patient.registration_number if patient else ''
+
+            invoice_number = getattr(visit, 'invoice_number', None) or f"INV-{str(visit.id)[-8:].upper()}"
+            invoice_row = {
+                'id': str(visit.id),
+                'invoice_number': invoice_number,
+                'invoice_date': visit.visit_date.date().isoformat() if visit.visit_date else None,
+                'consultation_fee': 0.0,
+                'medicine_total': float(getattr(visit, 'medicines_total', 0.0) or 0.0),
+                'discount': 0.0,
+                'tax': 0.0,
+                'grand_total': total_charged,
+                'payment_status': 'pending' if payment_method == 'debt' else 'paid',
+                'payment_method': payment_method,
+                'patient': {
+                    'id': str(visit.patient_id),
+                    'full_name': patient_name,
+                    'registration_number': registration_number,
+                },
+                'payment_breakdown': {
+                    'cash_amount': cash_amount,
+                    'online_amount': online_amount,
+                },
+            }
+
+            if q:
+                if (
+                    q not in invoice_number.lower()
+                    and q not in patient_name.lower()
+                    and q not in registration_number.lower()
+                ):
+                    continue
+
+            invoices.append(invoice_row)
+
+        return success_response(
+            {
+                'items': invoices,
+                'pagination': {
+                    'page': page,
+                    'pageSize': page_size,
+                    'total': total,
+                    'hasNextPage': has_next,
                 },
             }
         )

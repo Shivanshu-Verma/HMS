@@ -101,6 +101,22 @@ export interface CounsellorReportsResponse {
   };
 }
 
+export interface CounsellorReportSessionItem {
+  session_id: string;
+  patient_id: string;
+  patient_name: string;
+  registration_number?: string | null;
+  patient_category?: PatientCategory | null;
+  checked_in_at?: string | null;
+  completed_at?: string | null;
+  session_status: string;
+  session_notes?: string;
+  mood_assessment?: number;
+  risk_level?: "low" | "medium" | "high";
+  recommendations?: string;
+  follow_up_required?: boolean;
+}
+
 export interface PharmacyQueueItem {
   session_id: string;
   patient_id: string;
@@ -319,6 +335,15 @@ export async function getCounsellorReports(token: string) {
   });
 }
 
+export async function getCounsellorReportSessions(token: string) {
+  return apiRequest<{ items: CounsellorReportSessionItem[]; total: number }>(
+    "/api/v1/counsellor/reports/sessions/",
+    {
+      token,
+    },
+  );
+}
+
 export async function getCounsellorPatientsList(
   token: string,
   opts: { q?: string; page?: number; pageSize?: number } = {},
@@ -398,12 +423,12 @@ export async function getPharmacyReports(token: string) {
 
 export async function getPharmacyInvoices(
   token: string,
-  opts: { q?: string; page?: number; pageSize?: number } = {}
+  opts: { q?: string; page?: number; pageSize?: number } = {},
 ) {
   const params = new URLSearchParams();
-  if (opts.q) params.set('q', opts.q);
-  params.set('page', String(opts.page ?? 1));
-  params.set('pageSize', String(opts.pageSize ?? 100));
+  if (opts.q) params.set("q", opts.q);
+  params.set("page", String(opts.page ?? 1));
+  params.set("pageSize", String(opts.pageSize ?? 100));
   return apiRequest<{
     items: Array<{
       id: string;
@@ -414,15 +439,20 @@ export async function getPharmacyInvoices(
       discount: number;
       tax: number;
       grand_total: number;
-      payment_status: 'pending' | 'paid' | 'partial';
-      payment_method?: 'cash' | 'online' | 'split' | 'debt';
+      payment_status: "pending" | "paid" | "partial";
+      payment_method?: "cash" | "online" | "split" | "debt";
       patient: {
         id: string;
         full_name: string;
         registration_number: string;
       };
     }>;
-    pagination: { page: number; pageSize: number; total: number; hasNextPage: boolean };
+    pagination: {
+      page: number;
+      pageSize: number;
+      total: number;
+      hasNextPage: boolean;
+    };
   }>(`/api/v1/pharmacy/invoices/?${params.toString()}`, { token });
 }
 

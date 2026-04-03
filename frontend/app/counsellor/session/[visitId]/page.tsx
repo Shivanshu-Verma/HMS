@@ -1,19 +1,28 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
-import { Slider } from '@/components/ui/slider';
-import { Switch } from '@/components/ui/switch';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { useAuth } from '@/lib/auth-context';
-import { completeCounsellorSession, getCounsellorSessionDetail } from '@/lib/hms-api';
-import type { Visit, Patient, CounsellorSession, RiskLevel } from '@/lib/types';
-import { PatientCard } from '@/components/patient-card';
-import { RiskBadge } from '@/components/status-badge';
-import { toast } from 'sonner';
+import { useEffect, useState } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { useAuth } from "@/lib/auth-context";
+import {
+  completeCounsellorSession,
+  getCounsellorSessionDetail,
+} from "@/lib/hms-api";
+import type { Visit, Patient, CounsellorSession, RiskLevel } from "@/lib/types";
+import { PatientCard } from "@/components/patient-card";
+import { RiskBadge } from "@/components/status-badge";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   User,
@@ -23,11 +32,15 @@ import {
   Clock,
   Send,
   Loader2,
-} from 'lucide-react';
-import { navigate } from '@/lib/navigation';
+} from "lucide-react";
+import { navigate } from "@/lib/navigation";
 
-export default function SessionPage({ params }: { params: Promise<{ visitId: string }> }) {
-  const [visitId, setVisitId] = useState<string>('');
+export default function SessionPage({
+  params,
+}: {
+  params: Promise<{ visitId: string }>;
+}) {
+  const [visitId, setVisitId] = useState<string>("");
   const [isMounted, setIsMounted] = useState(false);
   const { user, accessToken } = useAuth();
 
@@ -37,10 +50,10 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
   const [sessionStartTime] = useState(Date.now());
 
   const [formData, setFormData] = useState({
-    session_notes: '',
+    session_notes: "",
     mood_assessment: 5,
-    risk_level: 'low' as RiskLevel,
-    recommendations: '',
+    risk_level: "low" as RiskLevel,
+    recommendations: "",
     follow_up_required: true,
   });
 
@@ -58,46 +71,54 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
         setVisit({
           id: res.session_id,
           patient_id: res.patient.patient_id,
-          visit_date: res.checked_in_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+          visit_date:
+            res.checked_in_at?.split("T")[0] ||
+            new Date().toISOString().split("T")[0],
           visit_number: 1,
-          current_stage: 'counsellor',
+          current_stage: "counsellor",
           checkin_time: res.checked_in_at || undefined,
-          status: 'in_progress',
+          status: "in_progress",
         });
 
         setPatient({
           id: res.patient.patient_id,
           registration_number: res.patient.registration_number,
-          patient_category: 'deaddiction',
+          patient_category: "deaddiction",
           full_name: res.patient.full_name,
-          date_of_birth: res.patient.date_of_birth || '',
+          date_of_birth: res.patient.date_of_birth || "",
           gender: res.patient.sex,
           phone: res.patient.phone_number,
-          address: '',
-          city: '',
-          state: '',
-          pincode: '',
-          addiction_type: (res.patient.addiction_type as any) || 'other',
+          address: "",
+          city: "",
+          state: "",
+          pincode: "",
+          addiction_type: (res.patient.addiction_type as any) || "other",
           addiction_duration: res.patient.addiction_duration_text || undefined,
-          first_visit_date: res.checked_in_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-          emergency_contact_name: '',
-          emergency_contact_phone: '',
-          emergency_contact_relation: '',
+          first_visit_date:
+            res.checked_in_at?.split("T")[0] ||
+            new Date().toISOString().split("T")[0],
+          emergency_contact_name: "",
+          emergency_contact_phone: "",
+          emergency_contact_relation: "",
           medical_history: res.patient.medical_history || undefined,
           allergies: res.patient.allergies || undefined,
-          status: 'active',
+          status: "active",
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
       })
       .catch((error) => {
-        toast.error(error instanceof Error ? error.message : 'Failed to load session details');
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to load session details",
+        );
       });
   }, [visitId, user, accessToken]);
 
   const handleSubmit = async () => {
     if (!formData.session_notes.trim()) {
-      toast.error('Please enter session notes');
+      toast.error("Please enter session notes");
       return;
     }
 
@@ -118,10 +139,12 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
         recommendations: formData.recommendations || undefined,
         follow_up_required: formData.follow_up_required,
       });
-      toast.success('Session completed and forwarded to doctor queue.');
-      window.location.href = '/counsellor';
+      toast.success("Session ended successfully.");
+      window.location.href = "/counsellor";
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to submit session');
+      toast.error(
+        error instanceof Error ? error.message : "Failed to submit session",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -142,12 +165,20 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-<Button variant="ghost" size="icon" onClick={() => navigate('/counsellor/queue')}>
-                    <ArrowLeft className="h-4 w-4" />
-                </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => navigate("/counsellor/queue")}
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Counselling Session</h1>
-          <p className="text-muted-foreground">Session with {patient.full_name}</p>
+          <h1 className="text-2xl font-bold text-foreground">
+            Counselling Session
+          </h1>
+          <p className="text-muted-foreground">
+            Session with {patient.full_name}
+          </p>
         </div>
       </div>
 
@@ -188,7 +219,10 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
                   id="recommendations"
                   value={formData.recommendations}
                   onChange={(e) =>
-                    setFormData({ ...formData, recommendations: e.target.value })
+                    setFormData({
+                      ...formData,
+                      recommendations: e.target.value,
+                    })
                   }
                   placeholder="Treatment recommendations for the doctor..."
                   rows={3}
@@ -283,19 +317,22 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
 
           {/* Submit Button */}
           <div className="flex justify-end gap-4">
-<Button variant="outline" onClick={() => navigate('/counsellor/queue')}>
-                      Cancel
-                    </Button>
+            <Button
+              variant="outline"
+              onClick={() => navigate("/counsellor/queue")}
+            >
+              Cancel
+            </Button>
             <Button onClick={handleSubmit} disabled={isSubmitting}>
               {isSubmitting ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Completing...
+                  Ending...
                 </>
               ) : (
                 <>
                   <Send className="h-4 w-4 mr-2" />
-                  Complete & Forward to Doctor
+                  End Session
                 </>
               )}
             </Button>
@@ -318,11 +355,15 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Addiction Type</span>
-                <span className="capitalize font-medium">{patient.addiction_type}</span>
+                <span className="capitalize font-medium">
+                  {patient.addiction_type}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Duration</span>
-                <span className="font-medium">{patient.addiction_duration || 'N/A'}</span>
+                <span className="font-medium">
+                  {patient.addiction_duration || "N/A"}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Visit Number</span>
@@ -330,13 +371,19 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
               </div>
               {patient.allergies && (
                 <div className="pt-2 border-t">
-                  <span className="text-muted-foreground block mb-1">Allergies</span>
-                  <span className="text-destructive font-medium">{patient.allergies}</span>
+                  <span className="text-muted-foreground block mb-1">
+                    Allergies
+                  </span>
+                  <span className="text-destructive font-medium">
+                    {patient.allergies}
+                  </span>
                 </div>
               )}
               {patient.medical_history && (
                 <div className="pt-2 border-t">
-                  <span className="text-muted-foreground block mb-1">Medical History</span>
+                  <span className="text-muted-foreground block mb-1">
+                    Medical History
+                  </span>
                   <span>{patient.medical_history}</span>
                 </div>
               )}
@@ -354,7 +401,10 @@ export default function SessionPage({ params }: { params: Promise<{ visitId: str
               </CardHeader>
               <CardContent className="space-y-3">
                 {previousSessions.slice(0, 3).map((session) => (
-                  <div key={session.id} className="p-3 rounded-lg border text-sm">
+                  <div
+                    key={session.id}
+                    className="p-3 rounded-lg border text-sm"
+                  >
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-muted-foreground">
                         {new Date(session.created_at).toLocaleDateString()}

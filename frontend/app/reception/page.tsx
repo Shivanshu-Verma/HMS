@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
 import {
   getDashboardStats,
+  getReceptionReports,
   getQueueStatus,
   type QueueItem,
 } from "@/lib/hms-api";
@@ -60,10 +61,20 @@ interface StatData {
   }>;
 }
 
+interface DashboardVisitItem extends QueueItem {
+  registration_number?: string;
+  date_of_birth?: string;
+  gender?: "male" | "female" | "other";
+  phone?: string;
+}
+
 export default function ReceptionDashboard() {
   const { accessToken } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [todayVisitItems, setTodayVisitItems] = useState<DashboardVisitItem[]>(
+    [],
+  );
   const [selectedStat, setSelectedStat] = useState<StatData | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
@@ -77,6 +88,31 @@ export default function ReceptionDashboard() {
     getQueueStatus(accessToken)
       .then((data) => setQueueItems(data.items))
       .catch(() => setQueueItems([]));
+
+    getReceptionReports(accessToken)
+      .then((data: any) => {
+        const items: DashboardVisitItem[] = Array.isArray(data?.daily?.items)
+          ? data.daily.items.map((item: any, idx: number) => ({
+              session_id: item.id || `visit-${idx}`,
+              patient_id: item.patient_id || "",
+              patient_name: item.patient?.full_name || "Unknown",
+              checked_in_at: item.checkin_time || "",
+              checked_in_by_name: "",
+              status: item.status || "checked_in",
+              current_stage: item.current_stage || "counsellor",
+              outstanding_debt: 0,
+              registration_number: item.patient?.registration_number || "",
+              date_of_birth: item.patient?.date_of_birth || "",
+              gender: (item.patient?.gender || "other") as
+                | "male"
+                | "female"
+                | "other",
+              phone: item.patient?.phone || "",
+            }))
+          : [];
+        setTodayVisitItems(items);
+      })
+      .catch(() => setTodayVisitItems([]));
   }, [accessToken]);
 
   const getStatData = (statType: string): StatData => {
@@ -114,20 +150,38 @@ export default function ReceptionDashboard() {
       },
     };
     const meta = stageMap[statType] || { title: "", description: "" };
-    let filtered = queueItems;
-    if (meta.stage) {
+    let filtered: DashboardVisitItem[] = queueItems.map((q) => ({ ...q }));
+    if (statType === "today_visits") {
+      filtered = todayVisitItems;
+    } else if (statType === "completed_today") {
+      filtered = todayVisitItems.filter(
+        (q) => q.current_stage === "completed" || q.status === "completed",
+      );
+    } else if (meta.stage) {
       filtered = queueItems.filter((q) => q.current_stage === meta.stage);
     }
     const patientItems = filtered.map((q) => ({
       patient: {
         id: q.patient_id,
         full_name: q.patient_name,
-        registration_number: "",
-        phone: "",
-        date_of_birth: "",
-        gender: "male" as const,
+        registration_number: q.registration_number || "",
+        phone: q.phone || "",
+        date_of_birth: q.date_of_birth || "",
+        gender: (q.gender || "male") as "male" | "female" | "other",
         status: "active" as const,
       } as Patient,
+      visit: {
+        id: q.session_id,
+        patient_id: q.patient_id,
+        visit_date: q.checked_in_at || new Date().toISOString(),
+        visit_number: 1,
+        current_stage: (q.current_stage as any) || "counsellor",
+        checkin_time: q.checked_in_at,
+        status:
+          q.status === "completed" || q.current_stage === "completed"
+            ? "completed"
+            : "in_progress",
+      } as Visit,
     }));
     return {
       title: meta.title,
@@ -189,14 +243,6 @@ export default function ReceptionDashboard() {
   const statCards = stats
     ? [
         {
-          title: "Total Patients",
-          value: stats.totalPatients,
-          icon: Users,
-          gradient: "from-primary to-primary/80",
-          trend: "+12%",
-          statType: "total_patients",
-        },
-        {
           title: "Today's Visits",
           value: stats.todayVisits,
           icon: Clock,
@@ -252,7 +298,7 @@ export default function ReceptionDashboard() {
       </div>
 
       {/* Stats Overview - Now Clickable Buttons */}
-      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-2">
         {statCards.map((stat) => (
           <button
             key={stat.title}
@@ -261,7 +307,7 @@ export default function ReceptionDashboard() {
           >
             <Card className="overflow-hidden border-0 shadow-md hover:shadow-xl transition-all duration-300 hover:scale-105 cursor-pointer group">
               <div className={`h-1.5 bg-gradient-to-r ${stat.gradient}`} />
-              <CardContent className="p-4">
+              <CardContent className="p-4 min-h-[132px] flex flex-col justify-between">
                 <div className="flex items-start justify-between">
                   <div>
                     <p className="text-3xl font-bold group-hover:text-primary transition-colors">
@@ -283,6 +329,7 @@ export default function ReceptionDashboard() {
                     {stat.trend} from last week
                   </div>
                 )}
+                {!stat.trend && <div className="h-[18px] mt-2" />}
                 <div className="flex items-center gap-1 mt-2 text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">
                   <Eye className="h-3 w-3" />
                   Click to view details

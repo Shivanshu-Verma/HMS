@@ -10,6 +10,7 @@ from apps.pharmacy.views import (
     PharmacyInventoryView,
     PharmacyInventoryItemView,
     PharmacyAddStockView,
+    PharmacyInvoicesView,
     PharmacyReportsView,
 )
 
@@ -25,5 +26,6 @@ urlpatterns = [
     path('pharmacy/inventory/', PharmacyInventoryView.as_view(), name='pharmacy-inventory'),
     path('pharmacy/inventory/<str:medicine_id>/', PharmacyInventoryItemView.as_view(), name='pharmacy-inventory-item'),
     path('pharmacy/inventory/<str:medicine_id>/stock/', PharmacyAddStockView.as_view(), name='pharmacy-add-stock'),
+    path('pharmacy/invoices/', PharmacyInvoicesView.as_view(), name='pharmacy-invoices'),
     path('pharmacy/reports/', PharmacyReportsView.as_view(), name='pharmacy-reports'),
 ]
