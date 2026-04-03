@@ -525,21 +525,7 @@ export default function DispensePage({
                       <TableCell>{p.medicine?.name || "Medicine"}</TableCell>
                       <TableCell className="text-right">{p.quantity}</TableCell>
                       <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <span className="text-xs text-muted-foreground">
-                            Rs.
-                          </span>
-                          <Input
-                            type="number"
-                            min={0}
-                            step="1"
-                            value={p.medicine?.price_per_unit ?? 0}
-                            onChange={(e) =>
-                              updatePrescriptionUnitPrice(index, e.target.value)
-                            }
-                            className="h-8 w-28 text-right"
-                          />
-                        </div>
+                        Rs. {(p.medicine?.price_per_unit || 0).toFixed(2)}
                       </TableCell>
                       <TableCell className="text-right">
                         Rs.{" "}

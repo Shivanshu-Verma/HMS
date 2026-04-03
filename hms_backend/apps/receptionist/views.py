@@ -14,12 +14,11 @@ from utils.response import paginated_response, success_response
 
 
 class ReceptionistReportsView(APIView):
-    """Return daily, monthly, and yearly check-in activity for the requesting receptionist."""
+    """Return daily, monthly, and yearly check-in activity for the hospital."""
 
     permission_classes = [IsReceptionist]
 
     def get(self, request):
-        staff_id = ObjectId(request.user.id)
         hospital_id = ObjectId(request.user.hospital_id)
 
         now = datetime.datetime.utcnow()
@@ -33,7 +32,6 @@ class ReceptionistReportsView(APIView):
 
         visits = Visit.objects(
             hospital_id=hospital_id,
-            checked_in_by=staff_id,
             visit_date__gte=year_start,
         )
 
@@ -45,15 +43,113 @@ class ReceptionistReportsView(APIView):
         # Include today's in-progress active sessions so today's count is current.
         today_start = datetime.datetime(today.year, today.month, today.day)
         tomorrow_start = today_start + datetime.timedelta(days=1)
-        active_today = ActiveSession.objects(
+
+        today_active_sessions = list(
+            ActiveSession.objects(
             hospital_id=hospital_id,
-            checked_in_by=staff_id,
             checked_in_at__gte=today_start,
             checked_in_at__lt=tomorrow_start,
-        ).count()
+            )
+        )
+        active_today = len(today_active_sessions)
+
+        today_archived_visits = list(
+            Visit.objects(
+                hospital_id=hospital_id,
+                visit_date__gte=today_start,
+                visit_date__lt=tomorrow_start,
+            )
+        )
 
         archived_today = day_counts.get(today, 0)
         daily_total = archived_today + active_today
+
+        patient_ids = set()
+        for visit in today_archived_visits:
+            if visit.patient_id:
+                patient_ids.add(visit.patient_id)
+        for session in today_active_sessions:
+            if session.patient_id:
+                patient_ids.add(session.patient_id)
+
+        patient_map = {
+            p.id: p
+            for p in Patient.objects(
+                hospital_id=hospital_id,
+                id__in=list(patient_ids),
+            )
+        }
+
+        psychiatric_visits = 0
+        deaddiction_visits = 0
+        daily_items = []
+
+        for visit in today_archived_visits:
+            patient = patient_map.get(visit.patient_id)
+            category = getattr(patient, 'patient_category', None)
+            if category == 'psychiatric':
+                psychiatric_visits += 1
+            elif category == 'deaddiction':
+                deaddiction_visits += 1
+
+            visit_status = getattr(getattr(visit, 'lifecycle', None), 'status', 'completed')
+            normalized_status = 'completed' if visit_status == 'completed' else 'in_progress'
+
+            stage = 'completed'
+            lifecycle = getattr(visit, 'lifecycle', None)
+            if lifecycle and getattr(lifecycle, 'current_stage', None):
+                stage = lifecycle.current_stage
+
+            daily_items.append({
+                'id': str(visit.id),
+                'patient_id': str(visit.patient_id),
+                'visit_date': visit.visit_date.date().isoformat() if visit.visit_date else today.isoformat(),
+                'visit_number': getattr(visit, 'visit_number', 0) or 0,
+                'current_stage': stage,
+                'checkin_time': lifecycle.checkin_at.isoformat() if lifecycle and getattr(lifecycle, 'checkin_at', None) else (visit.visit_date.isoformat() if visit.visit_date else None),
+                'status': normalized_status,
+                'patient': {
+                    'registration_number': patient.registration_number if patient else (getattr(getattr(visit, 'patient_snapshot', None), 'registration_number', None) or ''),
+                    'full_name': patient.full_name if patient else (getattr(getattr(visit, 'patient_snapshot', None), 'full_name', None) or ''),
+                    'phone': patient.phone if patient else (getattr(getattr(visit, 'patient_snapshot', None), 'phone', None) or ''),
+                    'date_of_birth': patient.date_of_birth.date().isoformat() if patient and patient.date_of_birth else None,
+                    'gender': patient.gender if patient else (getattr(getattr(visit, 'patient_snapshot', None), 'gender', None) or 'other'),
+                    'patient_category': category,
+                },
+            })
+
+        for session in today_active_sessions:
+            patient = patient_map.get(session.patient_id)
+            category = getattr(patient, 'patient_category', None)
+            if category == 'psychiatric':
+                psychiatric_visits += 1
+            elif category == 'deaddiction':
+                deaddiction_visits += 1
+
+            if session.status == 'dispensing':
+                stage = 'pharmacy'
+            elif session.counsellor_completed_at:
+                stage = 'doctor'
+            else:
+                stage = 'counsellor'
+
+            daily_items.append({
+                'id': f'active-{str(session.id)}',
+                'patient_id': str(session.patient_id),
+                'visit_date': session.checked_in_at.date().isoformat() if session.checked_in_at else today.isoformat(),
+                'visit_number': 0,
+                'current_stage': stage,
+                'checkin_time': session.checked_in_at.isoformat() if session.checked_in_at else None,
+                'status': 'in_progress',
+                'patient': {
+                    'registration_number': patient.registration_number if patient else '',
+                    'full_name': patient.full_name if patient else (session.patient_name or ''),
+                    'phone': patient.phone if patient else '',
+                    'date_of_birth': patient.date_of_birth.date().isoformat() if patient and patient.date_of_birth else None,
+                    'gender': patient.gender if patient else 'other',
+                    'patient_category': category,
+                },
+            })
 
         monthly_breakdown = []
         monthly_total = 0
@@ -78,7 +174,13 @@ class ReceptionistReportsView(APIView):
         payload = {
             'daily': {
                 'date': today.isoformat(),
+                'archived_checkins': archived_today,
+                'active_checkins': active_today,
                 'total_checkins': daily_total,
+                'completed_checkins': archived_today,
+                'psychiatric_visits': psychiatric_visits,
+                'deaddiction_visits': deaddiction_visits,
+                'items': sorted(daily_items, key=lambda item: item.get('checkin_time') or '', reverse=True),
             },
             'monthly': {
                 'year': year,

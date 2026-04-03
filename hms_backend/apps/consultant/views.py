@@ -8,10 +8,12 @@ from rest_framework.views import APIView
 
 from apps.auth_app.permissions import IsConsultant
 from apps.patients.models import Patient, StatusUpdate, Visit
+from apps.patients.serializers import serialize_patient
 from apps.consultant.serializers import SessionNotesSerializer
 from apps.sessions.models import ActiveSession
 from utils.exceptions import NotFoundError
-from utils.response import success_response
+from utils.pagination import parse_pagination_params, paginate_queryset
+from utils.response import success_response, paginated_response
 
 
 class StatusUpdateSerializer(serializers.Serializer):
@@ -188,7 +190,7 @@ class CounsellorSessionDetailView(APIView):
 
 
 class CounsellorSessionCompleteView(APIView):
-    """Persist counsellor session notes and forward active session to doctor stage."""
+    """Persist counsellor session notes and end the active counselling session."""
 
     permission_classes = [IsConsultant]
 
@@ -213,7 +215,7 @@ class CounsellorSessionCompleteView(APIView):
         session.counsellor_recommendations = serializer.validated_data.get('recommendations', '')
         session.counsellor_follow_up_required = serializer.validated_data.get('follow_up_required', True)
         session.counsellor_completed_at = now
-        session.status = 'doctor'
+        session.status = 'completed'
         session.updated_at = now
         session.save()
 
@@ -221,8 +223,7 @@ class CounsellorSessionCompleteView(APIView):
             {
                 'session_id': str(session.id),
                 'status': session.status,
-                'forwarded_to': 'doctor',
-                'counsellor_completed_at': now.isoformat(),
+                'session_ended_at': now.isoformat(),
             }
         )
 
@@ -360,3 +361,74 @@ class CounsellorReportsView(APIView):
                 },
             }
         )
+
+
+class CounsellorReportSessionsView(APIView):
+    """Return counsellor session rows (including completed) for reports."""
+
+    permission_classes = [IsConsultant]
+
+    def get(self, request):
+        hospital_id = ObjectId(request.user.hospital_id)
+
+        sessions = ActiveSession.objects(
+            hospital_id=hospital_id,
+            counsellor_completed_at__exists=True,
+        ).order_by('-checked_in_at')
+
+        items = []
+        for session in sessions:
+            patient = Patient.objects(id=session.patient_id).only(
+                'patient_category',
+                'registration_number',
+                'full_name',
+            ).first()
+
+            items.append(
+                {
+                    'session_id': str(session.id),
+                    'patient_id': str(session.patient_id),
+                    'patient_name': session.patient_name,
+                    'registration_number': patient.registration_number if patient else None,
+                    'patient_category': patient.patient_category if patient else None,
+                    'checked_in_at': session.checked_in_at.isoformat() if session.checked_in_at else None,
+                    'completed_at': session.counsellor_completed_at.isoformat() if session.counsellor_completed_at else None,
+                    'session_status': session.status,
+                    'session_notes': session.counsellor_session_notes or '',
+                    'mood_assessment': session.counsellor_mood_assessment,
+                    'risk_level': session.counsellor_risk_level,
+                    'recommendations': session.counsellor_recommendations or '',
+                    'follow_up_required': bool(session.counsellor_follow_up_required),
+                }
+            )
+
+        return success_response({'items': items, 'total': len(items)})
+
+
+class CounsellorPatientListView(APIView):
+    """Return a paginated list of patients for counsellor patient-data views."""
+
+    permission_classes = [IsConsultant]
+
+    def get(self, request):
+        hospital_id = ObjectId(request.user.hospital_id)
+        page, page_size = parse_pagination_params(request)
+        q = request.query_params.get('q', '').strip()
+
+        qs = Patient.objects(hospital_id=hospital_id).order_by('-updated_at')
+
+        if q:
+            qs = qs.filter(
+                __raw__={
+                    '$or': [
+                        {'full_name': {'$regex': q, '$options': 'i'}},
+                        {'registration_number': {'$regex': q, '$options': 'i'}},
+                        {'phone': {'$regex': q, '$options': 'i'}},
+                    ]
+                }
+            )
+
+        items, total, has_next = paginate_queryset(qs, page, page_size)
+        serialized = [serialize_patient(p) for p in items]
+
+        return paginated_response(serialized, page, page_size, total, has_next)

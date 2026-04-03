@@ -1,13 +1,19 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { useAuth } from '@/lib/auth-context';
-import { getPharmacyInvoices } from '@/lib/hms-api';
-import type { Invoice, Patient } from '@/lib/types';
-import { PaymentBadge } from '@/components/status-badge';
-import { Search, FileText, Calendar } from 'lucide-react';
+import { useEffect, useState } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { useAuth } from "@/lib/auth-context";
+import { getPharmacyInvoices } from "@/lib/hms-api";
+import type { Invoice, Patient } from "@/lib/types";
+import { PaymentBadge } from "@/components/status-badge";
+import { Search, FileText, Calendar } from "lucide-react";
 
 interface InvoiceWithPatient extends Invoice {
   patient: Patient;
@@ -16,7 +22,7 @@ interface InvoiceWithPatient extends Invoice {
 export default function InvoicesPage() {
   const { accessToken } = useAuth();
   const [invoices, setInvoices] = useState<InvoiceWithPatient[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     if (!accessToken) return;
@@ -37,26 +43,26 @@ export default function InvoicesPage() {
             grand_total: row.grand_total,
             payment_status: row.payment_status,
             payment_method: row.payment_method,
-            notes: '',
+            notes: "",
             created_at: row.invoice_date,
             patient: {
               id: row.patient.id,
               registration_number: row.patient.registration_number,
-              patient_category: 'deaddiction',
+              patient_category: "deaddiction",
               full_name: row.patient.full_name,
-              date_of_birth: '',
-              gender: 'other',
-              phone: '',
-              address: '',
-              city: '',
-              state: '',
-              pincode: '',
-              addiction_type: 'other',
+              date_of_birth: "",
+              gender: "other",
+              phone: "",
+              address: "",
+              city: "",
+              state: "",
+              pincode: "",
+              addiction_type: "other",
               first_visit_date: row.invoice_date,
-              emergency_contact_name: '',
-              emergency_contact_phone: '',
-              emergency_contact_relation: '',
-              status: 'active',
+              emergency_contact_name: "",
+              emergency_contact_phone: "",
+              emergency_contact_relation: "",
+              status: "active",
               created_at: row.invoice_date,
               updated_at: row.invoice_date,
             },
@@ -69,11 +75,11 @@ export default function InvoicesPage() {
     loadInvoices();
     const refreshTimer = window.setInterval(loadInvoices, 10000);
     const onFocus = () => loadInvoices();
-    window.addEventListener('focus', onFocus);
+    window.addEventListener("focus", onFocus);
 
     return () => {
       window.clearInterval(refreshTimer);
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener("focus", onFocus);
     };
   }, [accessToken]);
 
@@ -89,7 +95,7 @@ export default function InvoicesPage() {
 
   const totalRevenue = invoices.reduce((sum, i) => sum + i.grand_total, 0);
   const todayInvoices = invoices.filter(
-    (i) => i.invoice_date === new Date().toISOString().split('T')[0]
+    (i) => i.invoice_date === new Date().toISOString().split("T")[0],
   );
   const todayRevenue = todayInvoices.reduce((sum, i) => sum + i.grand_total, 0);
 
@@ -111,7 +117,9 @@ export default function InvoicesPage() {
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-sm text-muted-foreground">Today&apos;s Revenue</p>
+            <p className="text-sm text-muted-foreground">
+              Today&apos;s Revenue
+            </p>
             <p className="text-2xl font-bold">Rs. {todayRevenue.toFixed(2)}</p>
           </CardContent>
         </Card>
@@ -145,11 +153,14 @@ export default function InvoicesPage() {
                 <div className="flex items-start justify-between">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-semibold">{invoice.invoice_number}</h3>
+                      <h3 className="font-semibold">
+                        {invoice.invoice_number}
+                      </h3>
                       <PaymentBadge status={invoice.payment_status} />
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      {invoice.patient.full_name} ({invoice.patient.registration_number})
+                      {invoice.patient.full_name} (
+                      {invoice.patient.registration_number})
                     </p>
                     <div className="flex items-center gap-4 text-sm text-muted-foreground">
                       <span className="flex items-center gap-1">
@@ -157,18 +168,26 @@ export default function InvoicesPage() {
                         {new Date(invoice.invoice_date).toLocaleDateString()}
                       </span>
                       {invoice.payment_method && (
-                        <span className="capitalize">{invoice.payment_method}</span>
+                        <span className="capitalize">
+                          {invoice.payment_method}
+                        </span>
                       )}
                     </div>
                   </div>
 
                   <div className="text-right">
-                    <p className="text-lg font-bold">Rs. {invoice.grand_total.toFixed(2)}</p>
+                    <p className="text-lg font-bold">
+                      Rs. {invoice.grand_total.toFixed(2)}
+                    </p>
                     <div className="text-xs text-muted-foreground space-y-0.5">
-                      <p>Consultation: Rs. {invoice.consultation_fee.toFixed(2)}</p>
+                      <p>
+                        Consultation: Rs. {invoice.consultation_fee.toFixed(2)}
+                      </p>
                       <p>Medicines: Rs. {invoice.medicine_total.toFixed(2)}</p>
                       {invoice.discount > 0 && (
-                        <p className="text-emerald-600">Discount: -Rs. {invoice.discount.toFixed(2)}</p>
+                        <p className="text-emerald-600">
+                          Discount: -Rs. {invoice.discount.toFixed(2)}
+                        </p>
                       )}
                       <p>Tax: Rs. {invoice.tax.toFixed(2)}</p>
                     </div>
@@ -185,8 +204,8 @@ export default function InvoicesPage() {
                 <p className="text-lg font-medium">No invoices found</p>
                 <p className="text-sm">
                   {searchQuery
-                    ? 'Try a different search term'
-                    : 'Invoices will appear here after dispensing'}
+                    ? "Try a different search term"
+                    : "Invoices will appear here after dispensing"}
                 </p>
               </div>
             </CardContent>

@@ -326,6 +326,7 @@ class Visit(Document):
     checked_in_by = ObjectIdField()
     checked_in_by_name = StringField()
     dispense_items = ListField(EmbeddedDocumentField(DispenseItem), default=list)
+    invoice_number = StringField()
     medicines_total = FloatField(default=0.0)
     payment = EmbeddedDocumentField(PaymentRecord)
     debt_snapshot = EmbeddedDocumentField(DebtSnapshot)

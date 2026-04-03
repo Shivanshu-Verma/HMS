@@ -124,6 +124,22 @@ export interface CounsellorReportsResponse {
   };
 }
 
+export interface CounsellorReportSessionItem {
+  session_id: string;
+  patient_id: string;
+  patient_name: string;
+  registration_number?: string | null;
+  patient_category?: PatientCategory | null;
+  checked_in_at?: string | null;
+  completed_at?: string | null;
+  session_status: string;
+  session_notes?: string;
+  mood_assessment?: number;
+  risk_level?: "low" | "medium" | "high";
+  recommendations?: string;
+  follow_up_required?: boolean;
+}
+
 export interface PharmacyQueueItem {
   session_id: string;
   patient_id: string;
@@ -244,7 +260,8 @@ export async function registerPatientTier1(
   payloadOrToken: RegisterPatientTier1Payload | string,
   maybePayload?: RegisterPatientTier1Payload,
 ): Promise<PatientLookupResponse> {
-  const payload = typeof payloadOrToken === "string" ? maybePayload : payloadOrToken;
+  const payload =
+    typeof payloadOrToken === "string" ? maybePayload : payloadOrToken;
   return apiRequest<PatientLookupResponse>("/api/v1/patients/register/", {
     method: "POST",
     body: payload,
@@ -255,7 +272,8 @@ export async function lookupPatient(
   queryOrToken: { registration_number?: string } | string,
   maybeQuery?: { registration_number?: string },
 ): Promise<PatientLookupResponse> {
-  const query = typeof queryOrToken === "string" ? maybeQuery ?? {} : queryOrToken;
+  const query =
+    typeof queryOrToken === "string" ? (maybeQuery ?? {}) : queryOrToken;
   const params = new URLSearchParams();
   if (query.registration_number)
     params.set("registration_number", query.registration_number);
@@ -340,8 +358,12 @@ export async function completeCounsellorSession(
     follow_up_required?: boolean;
   },
 ) {
-  const sessionId = typeof payloadOrSessionId === "string" ? payloadOrSessionId : sessionIdOrToken;
-  const payload = typeof payloadOrSessionId === "string" ? maybePayload : payloadOrSessionId;
+  const sessionId =
+    typeof payloadOrSessionId === "string"
+      ? payloadOrSessionId
+      : sessionIdOrToken;
+  const payload =
+    typeof payloadOrSessionId === "string" ? maybePayload : payloadOrSessionId;
   return apiRequest(`/api/v1/counsellor/session/${sessionId}/complete/`, {
     method: "POST",
     body: payload,
@@ -354,7 +376,8 @@ export async function updatePatientStatus(
   maybeStatus?: "active" | "inactive" | "dead",
 ): Promise<{ patient_id: string; full_name: string; status: string }> {
   const patientId = maybeStatus ? statusOrPatientId : patientIdOrToken;
-  const status = maybeStatus ?? (statusOrPatientId as "active" | "inactive" | "dead");
+  const status =
+    maybeStatus ?? (statusOrPatientId as "active" | "inactive" | "dead");
   return apiRequest(`/api/v1/counsellor/patients/${patientId}/status/`, {
     method: "PATCH",
     body: { status },
@@ -362,7 +385,10 @@ export async function updatePatientStatus(
 }
 
 export async function getCounsellorReports(_token?: string) {
-  return apiRequest<CounsellorReportsResponse>("/api/v1/counsellor/reports/", {});
+  return apiRequest<CounsellorReportsResponse>(
+    "/api/v1/counsellor/reports/",
+    {},
+  );
 }
 
 export async function getCounsellorPatientsList(
@@ -406,15 +432,23 @@ export async function submitPharmacyDispense(
   sessionIdOrToken: string,
   payloadOrSessionId:
     | {
-        items: Array<{ medicine_id: string; quantity: number; unit_price: number }>;
+        items: Array<{
+          medicine_id: string;
+          quantity: number;
+          unit_price: number;
+        }>;
       }
     | string,
   maybePayload?: {
     items: Array<{ medicine_id: string; quantity: number; unit_price: number }>;
   },
 ) {
-  const sessionId = typeof payloadOrSessionId === "string" ? payloadOrSessionId : sessionIdOrToken;
-  const payload = typeof payloadOrSessionId === "string" ? maybePayload : payloadOrSessionId;
+  const sessionId =
+    typeof payloadOrSessionId === "string"
+      ? payloadOrSessionId
+      : sessionIdOrToken;
+  const payload =
+    typeof payloadOrSessionId === "string" ? maybePayload : payloadOrSessionId;
   return apiRequest<PharmacyDispenseResponse>(
     `/api/v1/pharmacy/session/${sessionId}/dispense/`,
     {
@@ -443,8 +477,12 @@ export async function checkoutPharmacySession(
     new_debt?: number;
   },
 ) {
-  const sessionId = typeof paymentOrSessionId === "string" ? paymentOrSessionId : sessionIdOrToken;
-  const payment = typeof paymentOrSessionId === "string" ? maybePayment : paymentOrSessionId;
+  const sessionId =
+    typeof paymentOrSessionId === "string"
+      ? paymentOrSessionId
+      : sessionIdOrToken;
+  const payment =
+    typeof paymentOrSessionId === "string" ? maybePayment : paymentOrSessionId;
   return apiRequest<PharmacyCheckoutResponse>(
     `/api/v1/pharmacy/session/${sessionId}/checkout/`,
     {
@@ -459,13 +497,13 @@ export async function getPharmacyReports(_token?: string) {
 }
 
 export async function getPharmacyInvoices(
-  optsOrToken: { q?: string; page?: number; pageSize?: number } | string = {}
+  optsOrToken: { q?: string; page?: number; pageSize?: number } | string = {},
 ) {
   const opts = typeof optsOrToken === "string" ? {} : optsOrToken;
   const params = new URLSearchParams();
-  if (opts.q) params.set('q', opts.q);
-  params.set('page', String(opts.page ?? 1));
-  params.set('pageSize', String(opts.pageSize ?? 100));
+  if (opts.q) params.set("q", opts.q);
+  params.set("page", String(opts.page ?? 1));
+  params.set("pageSize", String(opts.pageSize ?? 100));
   return apiRequest<{
     items: Array<{
       id: string;
@@ -476,15 +514,20 @@ export async function getPharmacyInvoices(
       discount: number;
       tax: number;
       grand_total: number;
-      payment_status: 'pending' | 'paid' | 'partial';
-      payment_method?: 'cash' | 'online' | 'split' | 'debt';
+      payment_status: "pending" | "paid" | "partial";
+      payment_method?: "cash" | "online" | "split" | "debt";
       patient: {
         id: string;
         full_name: string;
         registration_number: string;
       };
     }>;
-    pagination: { page: number; pageSize: number; total: number; hasNextPage: boolean };
+    pagination: {
+      page: number;
+      pageSize: number;
+      total: number;
+      hasNextPage: boolean;
+    };
   }>(`/api/v1/pharmacy/invoices/?${params.toString()}`, {});
 }
 
@@ -551,7 +594,8 @@ export async function addMedicine(
     description?: string;
   },
 ) {
-  const payload = typeof payloadOrToken === "string" ? maybePayload : payloadOrToken;
+  const payload =
+    typeof payloadOrToken === "string" ? maybePayload : payloadOrToken;
   return apiRequest("/api/v1/pharmacy/inventory/", {
     method: "POST",
     body: payload,
@@ -563,8 +607,14 @@ export async function addMedicineStock(
   quantityOrMedicineId: number | string,
   maybeQuantity?: number,
 ) {
-  const medicineId = typeof quantityOrMedicineId === "string" ? quantityOrMedicineId : medicineIdOrToken;
-  const quantity_to_add = typeof quantityOrMedicineId === "string" ? maybeQuantity : quantityOrMedicineId;
+  const medicineId =
+    typeof quantityOrMedicineId === "string"
+      ? quantityOrMedicineId
+      : medicineIdOrToken;
+  const quantity_to_add =
+    typeof quantityOrMedicineId === "string"
+      ? maybeQuantity
+      : quantityOrMedicineId;
   return apiRequest(`/api/v1/pharmacy/inventory/${medicineId}/stock/`, {
     method: "POST",
     body: { quantity_to_add },
@@ -583,7 +633,9 @@ export interface DashboardStatsResponse {
   revenue: number;
 }
 
-export async function getDashboardStats(_token?: string): Promise<DashboardStatsResponse> {
+export async function getDashboardStats(
+  _token?: string,
+): Promise<DashboardStatsResponse> {
   const raw = await apiRequest<Partial<DashboardStatsResponse>>(
     "/api/v1/receptionist/dashboard/",
     {},

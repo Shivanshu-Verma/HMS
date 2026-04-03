@@ -12,6 +12,7 @@ from utils.exceptions import ConflictError, NotFoundError, ValidationError
 def _serialize_visit(doc: dict) -> dict:
     return {
         'visit_id': str(doc['_id']),
+        'invoice_number': doc.get('invoice_number'),
         'visit_type': doc.get('visit_type'),
         'patient_id': str(doc.get('patient_id')),
         'visit_date': doc.get('visit_date').isoformat() if doc.get('visit_date') else None,
@@ -81,10 +82,12 @@ class ArchiveService:
                 if outstanding_after < 0:
                     raise ValidationError(code='INVALID_OUTSTANDING_DEBT', message='Outstanding debt cannot be negative.')
 
+                visit_object_id = ObjectId()
                 visit_doc = {
-                    '_id': ObjectId(),
+                    '_id': visit_object_id,
                     'hospital_id': active_session['hospital_id'],
                     'visit_uid': f"VIS-{uuid.uuid4().hex[:12].upper()}",
+                    'invoice_number': f"INV-{str(visit_object_id)[-8:].upper()}",
                     'visit_type': 'standard',
                     'patient_id': active_session['patient_id'],
                     'visit_date': datetime.datetime.utcnow(),
