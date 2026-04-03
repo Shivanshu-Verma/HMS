@@ -1,16 +1,35 @@
-'use client';
+"use client";
 
-import { useEffect, useState, useMemo } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { getCounsellorReports, type CounsellorReportsResponse } from '@/lib/hms-api';
-import { useAuth } from '@/lib/auth-context';
-import { PATIENT_CATEGORY_LABELS } from '@/lib/types';
-import type { Patient, Visit, CounsellorSession } from '@/lib/types';
+import { useEffect, useState, useMemo } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  getCounsellorPatientsList,
+  getCounsellorQueue,
+  getCounsellorReports,
+  type CounsellorReportsResponse,
+  type PatientLookupResponse,
+} from "@/lib/hms-api";
+import { useAuth } from "@/lib/auth-context";
+import { PATIENT_CATEGORY_LABELS } from "@/lib/types";
+import type { Patient } from "@/lib/types";
 import {
   Calendar,
   Download,
@@ -28,62 +47,128 @@ import {
   FileText,
   BarChart3,
   CalendarDays,
-} from 'lucide-react';
+} from "lucide-react";
 
-interface SessionWithPatient extends CounsellorSession {
+interface SessionWithPatient {
+  id: string;
+  patient_id: string;
+  created_at: string;
+  mood_assessment?: number;
+  risk_level?: "low" | "medium" | "high";
+  session_notes?: string;
   patient?: Patient;
-  visit?: Visit;
 }
 
 export default function CounsellorReportsPage() {
   const { accessToken } = useAuth();
   const [sessions, setSessions] = useState<SessionWithPatient[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [backendReports, setBackendReports] = useState<CounsellorReportsResponse | null>(null);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [backendReports, setBackendReports] =
+    useState<CounsellorReportsResponse | null>(null);
+  const [selectedDate, setSelectedDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  const [selectedMonth, setSelectedMonth] = useState(
+    new Date().toISOString().slice(0, 7),
+  );
+
+  const mapApiPatient = (p: PatientLookupResponse): Patient => ({
+    id: p.patient_id,
+    registration_number: p.registration_number,
+    patient_category: (p.patient_category as any) || "deaddiction",
+    full_name: p.full_name,
+    date_of_birth: p.date_of_birth,
+    phone: p.phone_number || p.phone || "",
+    gender: (p.sex || p.gender || "male") as "male" | "female" | "other",
+    status: (p.status as any) || "active",
+    address: (p.address_line1 || p.address || "") as string,
+    city: "",
+    state: "",
+    pincode: "",
+    addiction_type: "other",
+    first_visit_date: p.date_of_birth,
+    emergency_contact_name: "",
+    emergency_contact_phone: p.relative_phone || "",
+    emergency_contact_relation: "",
+    created_at: (p as any).created_at || new Date().toISOString(),
+    updated_at: (p as any).updated_at || new Date().toISOString(),
+  });
 
   useEffect(() => {
     if (!accessToken) return;
-    getCounsellorReports(accessToken)
-      .then((data) => setBackendReports(data))
-      .catch(() => setBackendReports(null));
+    const loadData = async () => {
+      try {
+        const [reportRes, queueRes, patientsRes] = await Promise.all([
+          getCounsellorReports(accessToken),
+          getCounsellorQueue(accessToken),
+          getCounsellorPatientsList(accessToken),
+        ]);
+
+        setBackendReports(reportRes);
+        const mappedPatients = (patientsRes.items || []).map(mapApiPatient);
+        setPatients(mappedPatients);
+
+        const patientMap = new Map(mappedPatients.map((p) => [p.id, p]));
+        const mappedSessions: SessionWithPatient[] = (queueRes.items || []).map(
+          (item) => ({
+            id: item.session_id,
+            patient_id: item.patient_id,
+            created_at: item.checked_in_at,
+            session_notes: "",
+            patient: patientMap.get(item.patient_id),
+          }),
+        );
+        setSessions(mappedSessions);
+      } catch {
+        setBackendReports(null);
+        setSessions([]);
+        setPatients([]);
+      }
+    };
+
+    loadData();
+    const refreshTimer = window.setInterval(loadData, 10000);
+    const onFocus = () => loadData();
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [accessToken]);
 
   // Daily Report Data
   const dailyReportData = useMemo(() => {
-    if (backendReports) {
-      return {
-        sessions: [],
-        total:
-          backendReports.daily?.total_followups ??
-          backendReports.daily?.total_checkins ??
-          0,
-        psychiatricCount: 0,
-        deaddictionCount: 0,
-        highRisk: 0,
-        mediumRisk: 0,
-        lowRisk: 0,
-        avgMood: 0,
-      };
-    }
+    const filtered = sessions.filter((s) =>
+      s.created_at.startsWith(selectedDate),
+    );
 
-    const filtered = sessions.filter(s => s.created_at.startsWith(selectedDate));
-    
-    const psychiatricSessions = filtered.filter(s => s.patient?.patient_category === 'psychiatric');
-    const deaddictionSessions = filtered.filter(s => s.patient?.patient_category === 'deaddiction');
-    
-    const highRisk = filtered.filter(s => s.risk_level === 'high').length;
-    const mediumRisk = filtered.filter(s => s.risk_level === 'medium').length;
-    const lowRisk = filtered.filter(s => s.risk_level === 'low').length;
-    
-    const avgMood = filtered.length > 0 
-      ? Math.round(filtered.reduce((acc, s) => acc + (s.mood_assessment || 5), 0) / filtered.length)
-      : 0;
-    
+    const psychiatricSessions = filtered.filter(
+      (s) => s.patient?.patient_category === "psychiatric",
+    );
+    const deaddictionSessions = filtered.filter(
+      (s) => s.patient?.patient_category === "deaddiction",
+    );
+
+    const highRisk = filtered.filter((s) => s.risk_level === "high").length;
+    const mediumRisk = filtered.filter((s) => s.risk_level === "medium").length;
+    const lowRisk = filtered.filter((s) => s.risk_level === "low").length;
+
+    const avgMood =
+      filtered.length > 0
+        ? Math.round(
+            filtered.reduce((acc, s) => acc + (s.mood_assessment || 5), 0) /
+              filtered.length,
+          )
+        : 0;
+
     return {
       sessions: filtered,
-      total: filtered.length,
+      total:
+        (backendReports && selectedDate === backendReports.daily?.date
+          ? (backendReports.daily?.total_followups ??
+            backendReports.daily?.total_checkins)
+          : undefined) ?? filtered.length,
       psychiatricCount: psychiatricSessions.length,
       deaddictionCount: deaddictionSessions.length,
       highRisk,
@@ -91,91 +176,101 @@ export default function CounsellorReportsPage() {
       lowRisk,
       avgMood,
     };
-  }, [sessions, selectedDate]);
+  }, [backendReports, sessions, selectedDate]);
 
   // Monthly Report Data
   const monthlyReportData = useMemo(() => {
-    if (backendReports) {
-      return {
-        sessions: [],
-        total:
-          backendReports.monthly?.total ??
-          backendReports.monthly?.total_checkins ??
-          0,
-        psychiatricCount: 0,
-        deaddictionCount: 0,
-        uniquePatients: 0,
-        byDay: {},
-        daysWithSessions: 0,
-        averagePerDay: 0,
-        highRisk: 0,
-        mediumRisk: 0,
-        lowRisk: 0,
-        avgMood: 0,
-      };
-    }
-
-    const [year, month] = selectedMonth.split('-').map(Number);
-    const filtered = sessions.filter(s => {
+    const [year, month] = selectedMonth.split("-").map(Number);
+    const filtered = sessions.filter((s) => {
       const sessionDate = new Date(s.created_at);
-      return sessionDate.getFullYear() === year && sessionDate.getMonth() === month - 1;
+      return (
+        sessionDate.getFullYear() === year &&
+        sessionDate.getMonth() === month - 1
+      );
     });
-    
-    const psychiatricSessions = filtered.filter(s => s.patient?.patient_category === 'psychiatric');
-    const deaddictionSessions = filtered.filter(s => s.patient?.patient_category === 'deaddiction');
-    
+
+    const psychiatricSessions = filtered.filter(
+      (s) => s.patient?.patient_category === "psychiatric",
+    );
+    const deaddictionSessions = filtered.filter(
+      (s) => s.patient?.patient_category === "deaddiction",
+    );
+
     // Group by day for chart
     const byDay: Record<string, SessionWithPatient[]> = {};
-    filtered.forEach(s => {
-      const day = s.created_at.split('T')[0];
+    filtered.forEach((s) => {
+      const day = s.created_at.split("T")[0];
       if (!byDay[day]) byDay[day] = [];
       byDay[day].push(s);
     });
-    
-    const uniquePatients = new Set(filtered.map(s => s.patient_id));
-    
-    const highRisk = filtered.filter(s => s.risk_level === 'high').length;
-    const mediumRisk = filtered.filter(s => s.risk_level === 'medium').length;
-    const lowRisk = filtered.filter(s => s.risk_level === 'low').length;
-    
-    const avgMood = filtered.length > 0 
-      ? Math.round(filtered.reduce((acc, s) => acc + (s.mood_assessment || 5), 0) / filtered.length)
-      : 0;
-    
+
+    const uniquePatients = new Set(filtered.map((s) => s.patient_id));
+
+    const highRisk = filtered.filter((s) => s.risk_level === "high").length;
+    const mediumRisk = filtered.filter((s) => s.risk_level === "medium").length;
+    const lowRisk = filtered.filter((s) => s.risk_level === "low").length;
+
+    const avgMood =
+      filtered.length > 0
+        ? Math.round(
+            filtered.reduce((acc, s) => acc + (s.mood_assessment || 5), 0) /
+              filtered.length,
+          )
+        : 0;
+
     return {
       sessions: filtered,
-      total: filtered.length,
+      total:
+        (backendReports &&
+        selectedMonth ===
+          `${String(backendReports.monthly?.year || "")}-${String(backendReports.monthly?.month || "").padStart(2, "0")}`
+          ? (backendReports.monthly?.total ??
+            backendReports.monthly?.total_checkins)
+          : undefined) ?? filtered.length,
       psychiatricCount: psychiatricSessions.length,
       deaddictionCount: deaddictionSessions.length,
       uniquePatients: uniquePatients.size,
       byDay,
       daysWithSessions: Object.keys(byDay).length,
-      averagePerDay: Object.keys(byDay).length > 0 
-        ? Math.round(filtered.length / Object.keys(byDay).length) 
-        : 0,
+      averagePerDay:
+        Object.keys(byDay).length > 0
+          ? Math.round(filtered.length / Object.keys(byDay).length)
+          : 0,
       highRisk,
       mediumRisk,
       lowRisk,
       avgMood,
     };
-  }, [sessions, selectedMonth]);
+  }, [backendReports, sessions, selectedMonth]);
 
   // Export daily report
   const exportDailyReport = () => {
-    const headers = ['Time', 'Patient Name', 'Category', 'Mood Score', 'Risk Level', 'Notes'];
-    const rows = dailyReportData.sessions.map(s => [
-      new Date(s.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      s.patient?.full_name || 'Unknown',
-      s.patient?.patient_category ? PATIENT_CATEGORY_LABELS[s.patient.patient_category] : 'N/A',
-      s.mood_assessment?.toString() || 'N/A',
-      s.risk_level || 'N/A',
-      s.session_notes?.substring(0, 50) || '',
+    const headers = [
+      "Time",
+      "Patient Name",
+      "Category",
+      "Mood Score",
+      "Risk Level",
+      "Notes",
+    ];
+    const rows = dailyReportData.sessions.map((s) => [
+      new Date(s.created_at).toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+      s.patient?.full_name || "Unknown",
+      s.patient?.patient_category
+        ? PATIENT_CATEGORY_LABELS[s.patient.patient_category]
+        : "N/A",
+      s.mood_assessment?.toString() || "N/A",
+      s.risk_level || "N/A",
+      s.session_notes?.substring(0, 50) || "",
     ]);
-    
-    const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
+
+    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
     a.download = `counsellor-report-${selectedDate}.csv`;
     a.click();
@@ -190,12 +285,23 @@ export default function CounsellorReportsPage() {
 
   const getRiskBadge = (level?: string) => {
     switch (level) {
-      case 'high':
+      case "high":
         return <Badge variant="destructive">High Risk</Badge>;
-      case 'medium':
-        return <Badge variant="secondary" className="bg-amber-100 text-amber-700">Medium</Badge>;
-      case 'low':
-        return <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">Low</Badge>;
+      case "medium":
+        return (
+          <Badge variant="secondary" className="bg-amber-100 text-amber-700">
+            Medium
+          </Badge>
+        );
+      case "low":
+        return (
+          <Badge
+            variant="secondary"
+            className="bg-emerald-100 text-emerald-700"
+          >
+            Low
+          </Badge>
+        );
       default:
         return <Badge variant="outline">Not Assessed</Badge>;
     }
@@ -206,12 +312,21 @@ export default function CounsellorReportsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Counselling Reports</h1>
-          <p className="text-muted-foreground mt-1">View daily and monthly counselling session statistics</p>
+          <h1 className="text-3xl font-bold text-foreground">
+            Counselling Reports
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            View daily and monthly counselling session statistics
+          </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Clock className="h-4 w-4" />
-          {new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          {new Date().toLocaleDateString("en-IN", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          })}
         </div>
       </div>
 
@@ -242,7 +357,11 @@ export default function CounsellorReportsPage() {
                     className="w-48"
                   />
                 </div>
-                <Button onClick={exportDailyReport} variant="outline" className="gap-2">
+                <Button
+                  onClick={exportDailyReport}
+                  variant="outline"
+                  className="gap-2"
+                >
                   <Download className="h-4 w-4" />
                   Export CSV
                 </Button>
@@ -260,8 +379,12 @@ export default function CounsellorReportsPage() {
                     <ClipboardList className="h-5 w-5 text-[#0d7377]" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{dailyReportData.total}</p>
-                    <p className="text-sm text-muted-foreground">Total Sessions</p>
+                    <p className="text-2xl font-bold">
+                      {dailyReportData.total}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Total Sessions
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -274,7 +397,9 @@ export default function CounsellorReportsPage() {
                     <Brain className="h-5 w-5 text-purple-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{dailyReportData.psychiatricCount}</p>
+                    <p className="text-2xl font-bold">
+                      {dailyReportData.psychiatricCount}
+                    </p>
                     <p className="text-sm text-muted-foreground">Psychiatric</p>
                   </div>
                 </div>
@@ -288,8 +413,12 @@ export default function CounsellorReportsPage() {
                     <Heart className="h-5 w-5 text-teal-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{dailyReportData.deaddictionCount}</p>
-                    <p className="text-sm text-muted-foreground">De-Addiction</p>
+                    <p className="text-2xl font-bold">
+                      {dailyReportData.deaddictionCount}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      De-Addiction
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -302,8 +431,12 @@ export default function CounsellorReportsPage() {
                     {getMoodIcon(dailyReportData.avgMood)}
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{dailyReportData.avgMood}/10</p>
-                    <p className="text-sm text-muted-foreground">Avg Mood Score</p>
+                    <p className="text-2xl font-bold">
+                      {dailyReportData.avgMood}/10
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Avg Mood Score
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -320,7 +453,9 @@ export default function CounsellorReportsPage() {
                       <AlertTriangle className="h-5 w-5 text-red-600" />
                     </div>
                     <div>
-                      <p className="text-xl font-bold text-red-600">{dailyReportData.highRisk}</p>
+                      <p className="text-xl font-bold text-red-600">
+                        {dailyReportData.highRisk}
+                      </p>
                       <p className="text-sm text-muted-foreground">High Risk</p>
                     </div>
                   </div>
@@ -335,8 +470,12 @@ export default function CounsellorReportsPage() {
                       <AlertTriangle className="h-5 w-5 text-amber-600" />
                     </div>
                     <div>
-                      <p className="text-xl font-bold text-amber-600">{dailyReportData.mediumRisk}</p>
-                      <p className="text-sm text-muted-foreground">Medium Risk</p>
+                      <p className="text-xl font-bold text-amber-600">
+                        {dailyReportData.mediumRisk}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Medium Risk
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -350,7 +489,9 @@ export default function CounsellorReportsPage() {
                       <CheckCircle className="h-5 w-5 text-emerald-600" />
                     </div>
                     <div>
-                      <p className="text-xl font-bold text-emerald-600">{dailyReportData.lowRisk}</p>
+                      <p className="text-xl font-bold text-emerald-600">
+                        {dailyReportData.lowRisk}
+                      </p>
                       <p className="text-sm text-muted-foreground">Low Risk</p>
                     </div>
                   </div>
@@ -364,9 +505,16 @@ export default function CounsellorReportsPage() {
             <CardHeader className="border-b bg-muted/30">
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                Session Details for {new Date(selectedDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+                Session Details for{" "}
+                {new Date(selectedDate).toLocaleDateString("en-IN", {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                })}
               </CardTitle>
-              <CardDescription>{dailyReportData.total} session(s) recorded</CardDescription>
+              <CardDescription>
+                {dailyReportData.total} session(s) recorded
+              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               {dailyReportData.sessions.length > 0 ? (
@@ -385,19 +533,38 @@ export default function CounsellorReportsPage() {
                     {dailyReportData.sessions.map((session) => (
                       <TableRow key={session.id}>
                         <TableCell className="font-medium">
-                          {new Date(session.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(session.created_at).toLocaleTimeString(
+                            "en-IN",
+                            { hour: "2-digit", minute: "2-digit" },
+                          )}
                         </TableCell>
                         <TableCell>
                           <div>
-                            <p className="font-medium">{session.patient?.full_name || 'Unknown'}</p>
-                            <p className="text-xs text-muted-foreground">{session.patient?.registration_number}</p>
+                            <p className="font-medium">
+                              {session.patient?.full_name || "Unknown"}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {session.patient?.registration_number}
+                            </p>
                           </div>
                         </TableCell>
                         <TableCell>
-                          {session.patient?.patient_category === 'psychiatric' ? (
-                            <Badge variant="secondary" className="bg-purple-100 text-purple-700">Psychiatric</Badge>
-                          ) : session.patient?.patient_category === 'deaddiction' ? (
-                            <Badge variant="secondary" className="bg-teal-100 text-teal-700">De-Addiction</Badge>
+                          {session.patient?.patient_category ===
+                          "psychiatric" ? (
+                            <Badge
+                              variant="secondary"
+                              className="bg-purple-100 text-purple-700"
+                            >
+                              Psychiatric
+                            </Badge>
+                          ) : session.patient?.patient_category ===
+                            "deaddiction" ? (
+                            <Badge
+                              variant="secondary"
+                              className="bg-teal-100 text-teal-700"
+                            >
+                              De-Addiction
+                            </Badge>
                           ) : (
                             <Badge variant="outline">Unknown</Badge>
                           )}
@@ -405,12 +572,14 @@ export default function CounsellorReportsPage() {
                         <TableCell>
                           <div className="flex items-center gap-2">
                             {getMoodIcon(session.mood_assessment || 5)}
-                            <span>{session.mood_assessment || 'N/A'}/10</span>
+                            <span>{session.mood_assessment || "N/A"}/10</span>
                           </div>
                         </TableCell>
-                        <TableCell>{getRiskBadge(session.risk_level)}</TableCell>
+                        <TableCell>
+                          {getRiskBadge(session.risk_level)}
+                        </TableCell>
                         <TableCell className="max-w-[200px] truncate">
-                          {session.session_notes || 'No notes'}
+                          {session.session_notes || "No notes"}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -421,8 +590,12 @@ export default function CounsellorReportsPage() {
                   <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
                     <FileText className="h-8 w-8 text-muted-foreground" />
                   </div>
-                  <p className="text-muted-foreground font-medium">No sessions recorded</p>
-                  <p className="text-sm text-muted-foreground mt-1">No counselling sessions for this date</p>
+                  <p className="text-muted-foreground font-medium">
+                    No sessions recorded
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    No counselling sessions for this date
+                  </p>
                 </div>
               )}
             </CardContent>
@@ -456,8 +629,12 @@ export default function CounsellorReportsPage() {
                     <ClipboardList className="h-5 w-5 text-[#0d7377]" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{monthlyReportData.total}</p>
-                    <p className="text-sm text-muted-foreground">Total Sessions</p>
+                    <p className="text-2xl font-bold">
+                      {monthlyReportData.total}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Total Sessions
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -470,8 +647,12 @@ export default function CounsellorReportsPage() {
                     <Users className="h-5 w-5 text-blue-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{monthlyReportData.uniquePatients}</p>
-                    <p className="text-sm text-muted-foreground">Unique Patients</p>
+                    <p className="text-2xl font-bold">
+                      {monthlyReportData.uniquePatients}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Unique Patients
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -484,8 +665,12 @@ export default function CounsellorReportsPage() {
                     <TrendingUp className="h-5 w-5 text-emerald-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{monthlyReportData.averagePerDay}</p>
-                    <p className="text-sm text-muted-foreground">Avg. Sessions/Day</p>
+                    <p className="text-2xl font-bold">
+                      {monthlyReportData.averagePerDay}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Avg. Sessions/Day
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -498,8 +683,12 @@ export default function CounsellorReportsPage() {
                     {getMoodIcon(monthlyReportData.avgMood)}
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{monthlyReportData.avgMood}/10</p>
-                    <p className="text-sm text-muted-foreground">Avg Mood Score</p>
+                    <p className="text-2xl font-bold">
+                      {monthlyReportData.avgMood}/10
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Avg Mood Score
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -516,14 +705,18 @@ export default function CounsellorReportsPage() {
                     <Brain className="h-5 w-5 text-purple-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{monthlyReportData.psychiatricCount}</p>
-                    <p className="text-sm text-muted-foreground">Psychiatric Sessions</p>
+                    <p className="text-2xl font-bold">
+                      {monthlyReportData.psychiatricCount}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Psychiatric Sessions
+                    </p>
                   </div>
                 </div>
                 <div className="mt-3 text-xs text-muted-foreground">
-                  {monthlyReportData.total > 0 
+                  {monthlyReportData.total > 0
                     ? `${Math.round((monthlyReportData.psychiatricCount / monthlyReportData.total) * 100)}% of total`
-                    : '0% of total'}
+                    : "0% of total"}
                 </div>
               </CardContent>
             </Card>
@@ -535,14 +728,18 @@ export default function CounsellorReportsPage() {
                     <Heart className="h-5 w-5 text-teal-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold">{monthlyReportData.deaddictionCount}</p>
-                    <p className="text-sm text-muted-foreground">De-Addiction Sessions</p>
+                    <p className="text-2xl font-bold">
+                      {monthlyReportData.deaddictionCount}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      De-Addiction Sessions
+                    </p>
                   </div>
                 </div>
                 <div className="mt-3 text-xs text-muted-foreground">
-                  {monthlyReportData.total > 0 
+                  {monthlyReportData.total > 0
                     ? `${Math.round((monthlyReportData.deaddictionCount / monthlyReportData.total) * 100)}% of total`
-                    : '0% of total'}
+                    : "0% of total"}
                 </div>
               </CardContent>
             </Card>
@@ -563,8 +760,12 @@ export default function CounsellorReportsPage() {
                     <AlertTriangle className="h-6 w-6 text-red-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-red-600">{monthlyReportData.highRisk}</p>
-                    <p className="text-sm text-red-600/80">High Risk Patients</p>
+                    <p className="text-2xl font-bold text-red-600">
+                      {monthlyReportData.highRisk}
+                    </p>
+                    <p className="text-sm text-red-600/80">
+                      High Risk Patients
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-4 p-4 rounded-lg bg-amber-50 border border-amber-100">
@@ -572,8 +773,12 @@ export default function CounsellorReportsPage() {
                     <AlertTriangle className="h-6 w-6 text-amber-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-amber-600">{monthlyReportData.mediumRisk}</p>
-                    <p className="text-sm text-amber-600/80">Medium Risk Patients</p>
+                    <p className="text-2xl font-bold text-amber-600">
+                      {monthlyReportData.mediumRisk}
+                    </p>
+                    <p className="text-sm text-amber-600/80">
+                      Medium Risk Patients
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-4 p-4 rounded-lg bg-emerald-50 border border-emerald-100">
@@ -581,8 +786,12 @@ export default function CounsellorReportsPage() {
                     <CheckCircle className="h-6 w-6 text-emerald-600" />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-emerald-600">{monthlyReportData.lowRisk}</p>
-                    <p className="text-sm text-emerald-600/80">Low Risk Patients</p>
+                    <p className="text-2xl font-bold text-emerald-600">
+                      {monthlyReportData.lowRisk}
+                    </p>
+                    <p className="text-sm text-emerald-600/80">
+                      Low Risk Patients
+                    </p>
                   </div>
                 </div>
               </div>
@@ -596,7 +805,9 @@ export default function CounsellorReportsPage() {
                 <Calendar className="h-5 w-5" />
                 Daily Breakdown
               </CardTitle>
-              <CardDescription>Sessions completed each day of the month</CardDescription>
+              <CardDescription>
+                Sessions completed each day of the month
+              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               {Object.keys(monthlyReportData.byDay).length > 0 ? (
@@ -606,28 +817,55 @@ export default function CounsellorReportsPage() {
                       <TableHead>Date</TableHead>
                       <TableHead className="text-center">Total</TableHead>
                       <TableHead className="text-center">Psychiatric</TableHead>
-                      <TableHead className="text-center">De-Addiction</TableHead>
+                      <TableHead className="text-center">
+                        De-Addiction
+                      </TableHead>
                       <TableHead className="text-center">High Risk</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {Object.entries(monthlyReportData.byDay)
-                      .sort(([a], [b]) => new Date(b).getTime() - new Date(a).getTime())
+                      .sort(
+                        ([a], [b]) =>
+                          new Date(b).getTime() - new Date(a).getTime(),
+                      )
                       .map(([date, daySessions]) => {
-                        const psychiatric = daySessions.filter(s => s.patient?.patient_category === 'psychiatric').length;
-                        const deaddiction = daySessions.filter(s => s.patient?.patient_category === 'deaddiction').length;
-                        const highRisk = daySessions.filter(s => s.risk_level === 'high').length;
+                        const psychiatric = daySessions.filter(
+                          (s) => s.patient?.patient_category === "psychiatric",
+                        ).length;
+                        const deaddiction = daySessions.filter(
+                          (s) => s.patient?.patient_category === "deaddiction",
+                        ).length;
+                        const highRisk = daySessions.filter(
+                          (s) => s.risk_level === "high",
+                        ).length;
                         return (
                           <TableRow key={date}>
                             <TableCell className="font-medium">
-                              {new Date(date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                              {new Date(date).toLocaleDateString("en-IN", {
+                                weekday: "short",
+                                day: "numeric",
+                                month: "short",
+                              })}
                             </TableCell>
-                            <TableCell className="text-center">{daySessions.length}</TableCell>
                             <TableCell className="text-center">
-                              <Badge variant="secondary" className="bg-purple-100 text-purple-700">{psychiatric}</Badge>
+                              {daySessions.length}
                             </TableCell>
                             <TableCell className="text-center">
-                              <Badge variant="secondary" className="bg-teal-100 text-teal-700">{deaddiction}</Badge>
+                              <Badge
+                                variant="secondary"
+                                className="bg-purple-100 text-purple-700"
+                              >
+                                {psychiatric}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge
+                                variant="secondary"
+                                className="bg-teal-100 text-teal-700"
+                              >
+                                {deaddiction}
+                              </Badge>
                             </TableCell>
                             <TableCell className="text-center">
                               {highRisk > 0 ? (
@@ -646,8 +884,12 @@ export default function CounsellorReportsPage() {
                   <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
                     <Calendar className="h-8 w-8 text-muted-foreground" />
                   </div>
-                  <p className="text-muted-foreground font-medium">No sessions this month</p>
-                  <p className="text-sm text-muted-foreground mt-1">Sessions will appear here once recorded</p>
+                  <p className="text-muted-foreground font-medium">
+                    No sessions this month
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Sessions will appear here once recorded
+                  </p>
                 </div>
               )}
             </CardContent>

@@ -1,27 +1,36 @@
-'use client';
+"use client";
 
-import { useState, useRef, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
+import { useState, useRef, useEffect } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 // Generate registration number locally
 function generateRegistrationNumber(): string {
-  const prefix = 'AGH';
+  const prefix = "AGH";
   const year = new Date().getFullYear().toString().slice(-2);
-  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+  const random = Math.floor(Math.random() * 10000)
+    .toString()
+    .padStart(4, "0");
   return `${prefix}${year}${random}`;
 }
-import { simulateFingerprint } from '@/lib/biometric';
-import type { Gender, PatientCategory } from '@/lib/types';
-import { PATIENT_CATEGORY_LABELS } from '@/lib/types';
-import { registerPatientTier1 } from '@/lib/hms-api';
-import { useAuth } from '@/lib/auth-context';
-import { toast } from 'sonner';
+import { simulateFingerprint } from "@/lib/biometric";
+import type { Gender, PatientCategory } from "@/lib/types";
+import { PATIENT_CATEGORY_LABELS } from "@/lib/types";
+import { registerPatientTier1 } from "@/lib/hms-api";
+import { useAuth } from "@/lib/auth-context";
+import { toast } from "sonner";
 import {
   User,
+  Users,
   Phone,
   Fingerprint,
   Loader2,
@@ -38,9 +47,9 @@ import {
   X,
   RefreshCw,
   CreditCard,
-} from 'lucide-react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { navigate } from '@/lib/navigation';
+} from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { navigate } from "@/lib/navigation";
 
 export default function RegisterPatientPage() {
   const { accessToken } = useAuth();
@@ -48,7 +57,7 @@ export default function RegisterPatientPage() {
   const [isCapturingFingerprint, setIsCapturingFingerprint] = useState(false);
   const [fingerprintCaptured, setFingerprintCaptured] = useState(false);
   const [registrationComplete, setRegistrationComplete] = useState(false);
-  const [newRegistrationNumber, setNewRegistrationNumber] = useState('');
+  const [newRegistrationNumber, setNewRegistrationNumber] = useState("");
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -57,39 +66,39 @@ export default function RegisterPatientPage() {
 
   // Instant registration form data
   const [instantFormData, setInstantFormData] = useState({
-    patient_category: '' as PatientCategory | '',
-    full_name: '',
-    file_number: '',
-    aadhaar_number: '',
-    date_of_birth: '',
-    sex: '' as Gender | '',
-    phone: '',
-    relative_phone: '',
-    address: '',
-    fingerprint_template: '',
-    photo: '',
+    patient_category: "" as PatientCategory | "",
+    full_name: "",
+    file_number: "",
+    aadhaar_number: "",
+    date_of_birth: "",
+    sex: "" as Gender | "",
+    phone: "",
+    relative_phone: "",
+    address: "",
+    fingerprint_template: "",
+    photo: "",
   });
 
   // Generate file number on mount
   useEffect(() => {
-    setInstantFormData(prev => ({
+    setInstantFormData((prev) => ({
       ...prev,
-      file_number: generateRegistrationNumber()
+      file_number: generateRegistrationNumber(),
     }));
   }, []);
 
   const handleInstantChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => {
     setInstantFormData({ ...instantFormData, [e.target.name]: e.target.value });
   };
 
   const generateNewFileNumber = () => {
-    setInstantFormData(prev => ({
+    setInstantFormData((prev) => ({
       ...prev,
-      file_number: generateRegistrationNumber()
+      file_number: generateRegistrationNumber(),
     }));
-    toast.success('New file number generated');
+    toast.success("New file number generated");
   };
 
   // Check if file number already exists
@@ -104,12 +113,12 @@ export default function RegisterPatientPage() {
 
   // Format Aadhaar number with spaces (XXXX XXXX XXXX)
   const formatAadhaar = (value: string): string => {
-    const digits = value.replace(/\D/g, '').slice(0, 12);
+    const digits = value.replace(/\D/g, "").slice(0, 12);
     const parts = [];
     for (let i = 0; i < digits.length; i += 4) {
       parts.push(digits.slice(i, i + 4));
     }
-    return parts.join(' ');
+    return parts.join(" ");
   };
 
   const handleAadhaarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -120,23 +129,26 @@ export default function RegisterPatientPage() {
   const handleCaptureFingerprint = async () => {
     setIsCapturingFingerprint(true);
     const result = await simulateFingerprint();
-    
+
     if (result.success && result.data) {
-      setInstantFormData({ ...instantFormData, fingerprint_template: result.data });
+      setInstantFormData({
+        ...instantFormData,
+        fingerprint_template: result.data,
+      });
       setFingerprintCaptured(true);
-      toast.success('Fingerprint captured successfully!');
+      toast.success("Fingerprint captured successfully!");
     } else {
-      toast.error(result.error || 'Failed to capture fingerprint');
+      toast.error(result.error || "Failed to capture fingerprint");
     }
-    
+
     setIsCapturingFingerprint(false);
   };
 
   // Camera functions
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user', width: 640, height: 480 } 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: 640, height: 480 },
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -144,13 +156,13 @@ export default function RegisterPatientPage() {
       }
       setIsCameraOpen(true);
     } catch {
-      toast.error('Unable to access camera. Please check permissions.');
+      toast.error("Unable to access camera. Please check permissions.");
     }
   };
 
   const stopCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
     setIsCameraOpen(false);
@@ -162,28 +174,28 @@ export default function RegisterPatientPage() {
       const canvas = canvasRef.current;
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(video, 0, 0);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
         setPhotoPreview(dataUrl);
-        setInstantFormData(prev => ({ ...prev, photo: dataUrl }));
+        setInstantFormData((prev) => ({ ...prev, photo: dataUrl }));
         stopCamera();
-        toast.success('Photo captured successfully!');
+        toast.success("Photo captured successfully!");
       }
     }
   };
 
   const removePhoto = () => {
     setPhotoPreview(null);
-    setInstantFormData(prev => ({ ...prev, photo: '' }));
+    setInstantFormData((prev) => ({ ...prev, photo: "" }));
   };
 
   // Cleanup camera on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
   }, []);
@@ -193,48 +205,59 @@ export default function RegisterPatientPage() {
 
     // Validation
     if (!instantFormData.patient_category) {
-      toast.error('Please select patient category (Psychiatric or De-Addiction)');
+      toast.error(
+        "Please select patient category (Psychiatric or De-Addiction)",
+      );
       return;
     }
 
-    if (!instantFormData.full_name || !instantFormData.phone || !instantFormData.date_of_birth || !instantFormData.sex) {
-      toast.error('Please fill in all required fields');
+    if (
+      !instantFormData.full_name ||
+      !instantFormData.phone ||
+      !instantFormData.date_of_birth ||
+      !instantFormData.sex
+    ) {
+      toast.error("Please fill in all required fields");
       return;
     }
 
     if (!instantFormData.relative_phone) {
-      toast.error('Relative mobile number is required');
+      toast.error("Relative mobile number is required");
       return;
     }
 
     if (!instantFormData.address) {
-      toast.error('Address is required');
+      toast.error("Address is required");
       return;
     }
 
     // Check file number uniqueness
     if (!isFileNumberUnique(instantFormData.file_number)) {
-      toast.error('This file number already exists. Please generate a new one.');
+      toast.error(
+        "This file number already exists. Please generate a new one.",
+      );
       return;
     }
 
     // Validate Aadhaar format (12 digits)
-    const aadhaarDigits = instantFormData.aadhaar_number.replace(/\s/g, '');
+    const aadhaarDigits = instantFormData.aadhaar_number.replace(/\s/g, "");
     if (instantFormData.aadhaar_number && aadhaarDigits.length !== 12) {
-      toast.error('Aadhaar number must be 12 digits');
+      toast.error("Aadhaar number must be 12 digits");
       return;
     }
 
     // Check Aadhaar uniqueness
     if (aadhaarDigits && !isAadhaarUnique(aadhaarDigits)) {
-      toast.error('This Aadhaar number is already registered with another patient.');
+      toast.error(
+        "This Aadhaar number is already registered with another patient.",
+      );
       return;
     }
 
     setIsSubmitting(true);
 
     if (!accessToken) {
-      toast.error('Please sign in again.');
+      toast.error("Please sign in again.");
       setIsSubmitting(false);
       return;
     }
@@ -247,7 +270,8 @@ export default function RegisterPatientPage() {
         phone_number: instantFormData.phone,
         date_of_birth: instantFormData.date_of_birth,
         sex: instantFormData.sex,
-        fingerprint_hash: instantFormData.fingerprint_template || `manual-${Date.now()}`,
+        fingerprint_hash:
+          instantFormData.fingerprint_template || `manual-${Date.now()}`,
         aadhaar_number: aadhaarDigits || undefined,
         relative_phone: instantFormData.relative_phone,
         address_line1: instantFormData.address,
@@ -255,9 +279,13 @@ export default function RegisterPatientPage() {
 
       setNewRegistrationNumber(result.registration_number);
       setRegistrationComplete(true);
-      toast.success(`Patient registered successfully! File No: ${result.registration_number}`);
+      toast.success(
+        `Patient registered successfully! File No: ${result.registration_number}`,
+      );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Registration failed');
+      toast.error(
+        error instanceof Error ? error.message : "Registration failed",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -265,22 +293,22 @@ export default function RegisterPatientPage() {
 
   const handleNewRegistration = () => {
     setInstantFormData({
-      patient_category: '',
-      full_name: '',
+      patient_category: "",
+      full_name: "",
       file_number: generateRegistrationNumber(),
-      aadhaar_number: '',
-      date_of_birth: '',
-      sex: '',
-      phone: '',
-      relative_phone: '',
-      address: '',
-      fingerprint_template: '',
-      photo: '',
+      aadhaar_number: "",
+      date_of_birth: "",
+      sex: "",
+      phone: "",
+      relative_phone: "",
+      address: "",
+      fingerprint_template: "",
+      photo: "",
     });
     setPhotoPreview(null);
     setFingerprintCaptured(false);
     setRegistrationComplete(false);
-    setNewRegistrationNumber('');
+    setNewRegistrationNumber("");
   };
 
   if (registrationComplete) {
@@ -288,11 +316,17 @@ export default function RegisterPatientPage() {
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center gap-4">
-<Button variant="ghost" size="icon" onClick={() => navigate('/reception')}>
-                    <ArrowLeft className="h-4 w-4" />
-                </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate("/reception")}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Registration Complete</h1>
+            <h1 className="text-2xl font-bold text-foreground">
+              Registration Complete
+            </h1>
             <p className="text-muted-foreground">
               Patient has been registered successfully
             </p>
@@ -305,43 +339,61 @@ export default function RegisterPatientPage() {
               <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mx-auto shadow-lg">
                 <CheckCircle className="h-10 w-10 text-white" />
               </div>
-              
+
               <div>
-                <h2 className="text-2xl font-bold text-foreground mb-2">Registration Successful!</h2>
-                <p className="text-muted-foreground">The patient has been added to the system</p>
+                <h2 className="text-2xl font-bold text-foreground mb-2">
+                  Registration Successful!
+                </h2>
+                <p className="text-muted-foreground">
+                  The patient has been added to the system
+                </p>
               </div>
 
               <div className="bg-gradient-to-r from-teal-50 to-emerald-50 dark:from-teal-900/20 dark:to-emerald-900/20 rounded-xl p-6 border border-teal-200 dark:border-teal-800">
-                <p className="text-sm text-muted-foreground mb-1">File Number</p>
-                <p className="text-3xl font-bold text-teal-700 dark:text-teal-400">{newRegistrationNumber}</p>
+                <p className="text-sm text-muted-foreground mb-1">
+                  File Number
+                </p>
+                <p className="text-3xl font-bold text-teal-700 dark:text-teal-400">
+                  {newRegistrationNumber}
+                </p>
               </div>
 
               <Alert className="text-left bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
                 <Info className="h-4 w-4 text-blue-600" />
                 <AlertDescription className="text-blue-700 dark:text-blue-300">
-                  Mandatory registration details are now saved immediately. Additional general profile data (addiction type, medical history, allergies, etc.)
-                  from the <strong>Patient Data</strong> section.
+                  Mandatory registration details are now saved immediately.
+                  Additional general profile data (addiction type, medical
+                  history, allergies, etc.) from the{" "}
+                  <strong>Patient Data</strong> section.
                 </AlertDescription>
               </Alert>
 
               <div className="flex flex-col sm:flex-row gap-3 pt-4">
-                <Button 
+                <Button
                   onClick={handleNewRegistration}
                   className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700"
                 >
                   <User className="h-4 w-4 mr-2" />
                   Register Another Patient
                 </Button>
-<Button variant="outline" className="flex-1" onClick={() => navigate('/reception/patients')}>
-                          <FileText className="h-4 w-4 mr-2" />
-                          Go to Patient Data
-                      </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => navigate("/reception/patients")}
+                >
+                  <FileText className="h-4 w-4 mr-2" />
+                  Go to Patient Data
+                </Button>
               </div>
 
-<Button variant="ghost" className="w-full" onClick={() => navigate('/reception/checkin')}>
-                          <Fingerprint className="h-4 w-4 mr-2" />
-                          Go to Check-in
-                      </Button>
+              <Button
+                variant="ghost"
+                className="w-full"
+                onClick={() => navigate("/reception/checkin")}
+              >
+                <Fingerprint className="h-4 w-4 mr-2" />
+                Go to Check-in
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -353,11 +405,17 @@ export default function RegisterPatientPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-<Button variant="ghost" size="icon" onClick={() => navigate('/reception')}>
-                    <ArrowLeft className="h-4 w-4" />
-                </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => navigate("/reception")}
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Register New Patient</h1>
+          <h1 className="text-2xl font-bold text-foreground">
+            Register New Patient
+          </h1>
           <p className="text-muted-foreground">
             Quick registration for new patients
           </p>
@@ -383,42 +441,85 @@ export default function RegisterPatientPage() {
               <CardContent className="pt-6">
                 <div className="flex flex-col items-center gap-4">
                   <Label className="text-lg font-semibold text-center">
-                    Select Patient Category <span className="text-destructive">*</span>
+                    Select Patient Category{" "}
+                    <span className="text-destructive">*</span>
                   </Label>
                   <div className="flex gap-4">
                     <Button
                       type="button"
-                      variant={instantFormData.patient_category === 'psychiatric' ? 'default' : 'outline'}
+                      variant={
+                        instantFormData.patient_category === "psychiatric"
+                          ? "default"
+                          : "outline"
+                      }
                       className={`h-20 w-48 flex flex-col gap-2 ${
-                        instantFormData.patient_category === 'psychiatric'
-                          ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white'
-                          : 'border-2 border-purple-300 hover:border-purple-500 hover:bg-purple-50'
+                        instantFormData.patient_category === "psychiatric"
+                          ? "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white"
+                          : "border-2 border-purple-300 hover:border-purple-500 hover:bg-purple-50"
                       }`}
-                      onClick={() => setInstantFormData({ ...instantFormData, patient_category: 'psychiatric' })}
+                      onClick={() =>
+                        setInstantFormData({
+                          ...instantFormData,
+                          patient_category: "psychiatric",
+                        })
+                      }
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-6 w-6"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                        />
                       </svg>
                       <span className="font-semibold">Psychiatric</span>
                     </Button>
                     <Button
                       type="button"
-                      variant={instantFormData.patient_category === 'deaddiction' ? 'default' : 'outline'}
+                      variant={
+                        instantFormData.patient_category === "deaddiction"
+                          ? "default"
+                          : "outline"
+                      }
                       className={`h-20 w-48 flex flex-col gap-2 ${
-                        instantFormData.patient_category === 'deaddiction'
-                          ? 'bg-gradient-to-r from-[#0d7377] to-[#14919b] hover:from-[#0a5c5f] hover:to-[#0d7377] text-white'
-                          : 'border-2 border-[#0d7377]/30 hover:border-[#0d7377] hover:bg-[#0d7377]/5'
+                        instantFormData.patient_category === "deaddiction"
+                          ? "bg-gradient-to-r from-[#0d7377] to-[#14919b] hover:from-[#0a5c5f] hover:to-[#0d7377] text-white"
+                          : "border-2 border-[#0d7377]/30 hover:border-[#0d7377] hover:bg-[#0d7377]/5"
                       }`}
-                      onClick={() => setInstantFormData({ ...instantFormData, patient_category: 'deaddiction' })}
+                      onClick={() =>
+                        setInstantFormData({
+                          ...instantFormData,
+                          patient_category: "deaddiction",
+                        })
+                      }
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-6 w-6"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"
+                        />
                       </svg>
                       <span className="font-semibold">De-Addiction</span>
                     </Button>
                   </div>
                   {!instantFormData.patient_category && (
-                    <p className="text-sm text-muted-foreground">Please select the patient category to proceed</p>
+                    <p className="text-sm text-muted-foreground">
+                      Please select the patient category to proceed
+                    </p>
                   )}
                 </div>
               </CardContent>
@@ -433,15 +534,22 @@ export default function RegisterPatientPage() {
                       <User className="h-5 w-5 text-white" />
                     </div>
                     <div>
-                      <CardTitle className="text-lg">Patient Information</CardTitle>
-                      <CardDescription>Basic details for quick registration</CardDescription>
+                      <CardTitle className="text-lg">
+                        Patient Information
+                      </CardTitle>
+                      <CardDescription>
+                        Basic details for quick registration
+                      </CardDescription>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {/* File Number */}
                   <div>
-                    <Label htmlFor="file_number" className="flex items-center gap-2">
+                    <Label
+                      htmlFor="file_number"
+                      className="flex items-center gap-2"
+                    >
                       <Hash className="h-4 w-4 text-teal-600" />
                       File Number <span className="text-destructive">*</span>
                     </Label>
@@ -455,9 +563,9 @@ export default function RegisterPatientPage() {
                         className="font-mono text-lg font-semibold"
                         required
                       />
-                      <Button 
-                        type="button" 
-                        variant="outline" 
+                      <Button
+                        type="button"
+                        variant="outline"
                         size="icon"
                         onClick={generateNewFileNumber}
                         title="Generate new file number"
@@ -465,14 +573,22 @@ export default function RegisterPatientPage() {
                         <RefreshCw className="h-4 w-4" />
                       </Button>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">Auto-generated unique number. You can modify if needed.</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Auto-generated unique number. You can modify if needed.
+                    </p>
                   </div>
 
                   {/* Aadhaar Number */}
                   <div>
-                    <Label htmlFor="aadhaar_number" className="flex items-center gap-2">
+                    <Label
+                      htmlFor="aadhaar_number"
+                      className="flex items-center gap-2"
+                    >
                       <CreditCard className="h-4 w-4 text-teal-600" />
-                      Aadhaar Card Number <span className="text-muted-foreground text-xs">(Unique ID)</span>
+                      Aadhaar Card Number{" "}
+                      <span className="text-muted-foreground text-xs">
+                        (Unique ID)
+                      </span>
                     </Label>
                     <Input
                       id="aadhaar_number"
@@ -483,12 +599,18 @@ export default function RegisterPatientPage() {
                       className="mt-1.5 font-mono tracking-wider"
                       maxLength={14}
                     />
-                    <p className="text-xs text-muted-foreground mt-1">12-digit Aadhaar number. Used as unique patient identifier.</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      12-digit Aadhaar number. Used as unique patient
+                      identifier.
+                    </p>
                   </div>
 
                   {/* Full Name */}
                   <div>
-                    <Label htmlFor="full_name" className="flex items-center gap-2">
+                    <Label
+                      htmlFor="full_name"
+                      className="flex items-center gap-2"
+                    >
                       <User className="h-4 w-4 text-teal-600" />
                       Full Name <span className="text-destructive">*</span>
                     </Label>
@@ -505,7 +627,10 @@ export default function RegisterPatientPage() {
 
                   {/* Date of Birth */}
                   <div>
-                    <Label htmlFor="date_of_birth" className="flex items-center gap-2">
+                    <Label
+                      htmlFor="date_of_birth"
+                      className="flex items-center gap-2"
+                    >
                       <Calendar className="h-4 w-4 text-teal-600" />
                       Date of Birth <span className="text-destructive">*</span>
                     </Label>
@@ -533,7 +658,7 @@ export default function RegisterPatientPage() {
                       onChange={(e) =>
                         setInstantFormData({
                           ...instantFormData,
-                          sex: e.target.value as Gender | '',
+                          sex: e.target.value as Gender | "",
                         })
                       }
                       className="mt-1.5 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -549,9 +674,13 @@ export default function RegisterPatientPage() {
                   {/* Mobile Numbers */}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div>
-                      <Label htmlFor="phone" className="flex items-center gap-2">
+                      <Label
+                        htmlFor="phone"
+                        className="flex items-center gap-2"
+                      >
                         <Phone className="h-4 w-4 text-teal-600" />
-                        Mobile Number <span className="text-destructive">*</span>
+                        Mobile Number{" "}
+                        <span className="text-destructive">*</span>
                       </Label>
                       <Input
                         id="phone"
@@ -566,9 +695,13 @@ export default function RegisterPatientPage() {
                     </div>
 
                     <div>
-                      <Label htmlFor="relative_phone" className="flex items-center gap-2">
+                      <Label
+                        htmlFor="relative_phone"
+                        className="flex items-center gap-2"
+                      >
                         <Phone className="h-4 w-4 text-orange-600" />
-                        Relative Mobile <span className="text-destructive">*</span>
+                        Relative Mobile{" "}
+                        <span className="text-destructive">*</span>
                       </Label>
                       <Input
                         id="relative_phone"
@@ -585,7 +718,10 @@ export default function RegisterPatientPage() {
 
                   {/* Address */}
                   <div>
-                    <Label htmlFor="address" className="flex items-center gap-2">
+                    <Label
+                      htmlFor="address"
+                      className="flex items-center gap-2"
+                    >
                       <MapPin className="h-4 w-4 text-teal-600" />
                       Address <span className="text-destructive">*</span>
                     </Label>
@@ -610,8 +746,12 @@ export default function RegisterPatientPage() {
                       <Camera className="h-5 w-5 text-white" />
                     </div>
                     <div>
-                      <CardTitle className="text-lg">Photo & Biometrics</CardTitle>
-                      <CardDescription>Capture patient photo and fingerprint</CardDescription>
+                      <CardTitle className="text-lg">
+                        Photo & Biometrics
+                      </CardTitle>
+                      <CardDescription>
+                        Capture patient photo and fingerprint
+                      </CardDescription>
                     </div>
                   </div>
                 </CardHeader>
@@ -622,12 +762,18 @@ export default function RegisterPatientPage() {
                       <Camera className="h-4 w-4 text-blue-600" />
                       Patient Photo
                     </Label>
-                    
+
                     {!isCameraOpen && !photoPreview && (
                       <div className="border-2 border-dashed border-muted-foreground/25 rounded-xl p-8 text-center">
                         <Camera className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
-                        <p className="text-sm text-muted-foreground mb-4">No photo captured yet</p>
-                        <Button type="button" variant="outline" onClick={startCamera}>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          No photo captured yet
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={startCamera}
+                        >
                           <Camera className="h-4 w-4 mr-2" />
                           Open Camera
                         </Button>
@@ -646,11 +792,19 @@ export default function RegisterPatientPage() {
                           />
                         </div>
                         <div className="flex gap-2">
-                          <Button type="button" onClick={capturePhoto} className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600">
+                          <Button
+                            type="button"
+                            onClick={capturePhoto}
+                            className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600"
+                          >
                             <Camera className="h-4 w-4 mr-2" />
                             Capture Photo
                           </Button>
-                          <Button type="button" variant="outline" onClick={stopCamera}>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={stopCamera}
+                          >
                             <X className="h-4 w-4 mr-2" />
                             Cancel
                           </Button>
@@ -661,24 +815,27 @@ export default function RegisterPatientPage() {
                     {photoPreview && (
                       <div className="space-y-3">
                         <div className="relative rounded-xl overflow-hidden">
-                          <img 
-                            src={photoPreview} 
-                            alt="Patient preview" 
+                          <img
+                            src={photoPreview}
+                            alt="Patient preview"
                             className="w-full aspect-[4/3] object-cover"
                           />
                           <div className="absolute top-2 right-2 flex gap-2">
-                            <Button 
-                              type="button" 
-                              size="sm" 
+                            <Button
+                              type="button"
+                              size="sm"
                               variant="secondary"
-                              onClick={() => { removePhoto(); startCamera(); }}
+                              onClick={() => {
+                                removePhoto();
+                                startCamera();
+                              }}
                             >
                               <RefreshCw className="h-4 w-4 mr-1" />
                               Retake
                             </Button>
-                            <Button 
-                              type="button" 
-                              size="sm" 
+                            <Button
+                              type="button"
+                              size="sm"
                               variant="destructive"
                               onClick={removePhoto}
                             >
@@ -705,10 +862,10 @@ export default function RegisterPatientPage() {
                       <div
                         className={`w-20 h-20 rounded-xl flex items-center justify-center transition-all ${
                           fingerprintCaptured
-                            ? 'bg-emerald-100 dark:bg-emerald-900/30 border-2 border-emerald-500'
+                            ? "bg-emerald-100 dark:bg-emerald-900/30 border-2 border-emerald-500"
                             : isCapturingFingerprint
-                            ? 'bg-teal-100 dark:bg-teal-900/30 animate-pulse border-2 border-teal-500'
-                            : 'bg-secondary border-2 border-transparent'
+                              ? "bg-teal-100 dark:bg-teal-900/30 animate-pulse border-2 border-teal-500"
+                              : "bg-secondary border-2 border-transparent"
                         }`}
                       >
                         {isCapturingFingerprint ? (
@@ -716,7 +873,9 @@ export default function RegisterPatientPage() {
                         ) : (
                           <Fingerprint
                             className={`h-10 w-10 ${
-                              fingerprintCaptured ? 'text-emerald-600' : 'text-muted-foreground'
+                              fingerprintCaptured
+                                ? "text-emerald-600"
+                                : "text-muted-foreground"
                             }`}
                           />
                         )}
@@ -724,17 +883,19 @@ export default function RegisterPatientPage() {
                       <div className="flex-1">
                         <Button
                           type="button"
-                          variant={fingerprintCaptured ? 'outline' : 'secondary'}
+                          variant={
+                            fingerprintCaptured ? "outline" : "secondary"
+                          }
                           onClick={handleCaptureFingerprint}
                           disabled={isCapturingFingerprint}
                           className="w-full"
                           size="lg"
                         >
                           {isCapturingFingerprint
-                            ? 'Scanning...'
+                            ? "Scanning..."
                             : fingerprintCaptured
-                            ? 'Rescan Fingerprint'
-                            : 'Scan Fingerprint'}
+                              ? "Rescan Fingerprint"
+                              : "Scan Fingerprint"}
                         </Button>
                         {fingerprintCaptured && (
                           <p className="text-xs text-emerald-600 mt-2 flex items-center gap-1">
@@ -796,10 +957,14 @@ export default function RegisterPatientPage() {
                     <span className="text-white font-bold">1</span>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-foreground">Instant Registration</h3>
+                    <h3 className="font-semibold text-foreground">
+                      Instant Registration
+                    </h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Capture mandatory details first: Patient Category, Name, File Number, Date of Birth, Sex, Mobile Numbers, Address, and Fingerprint.
-                      This allows patients to be registered and checked in immediately.
+                      Capture mandatory details first: Patient Category, Name,
+                      File Number, Date of Birth, Sex, Mobile Numbers, Address,
+                      and Fingerprint. This allows patients to be registered and
+                      checked in immediately.
                     </p>
                   </div>
                 </div>
@@ -809,10 +974,13 @@ export default function RegisterPatientPage() {
                     <span className="text-white font-bold">2</span>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-foreground">Complete Profile Later</h3>
+                    <h3 className="font-semibold text-foreground">
+                      Complete Profile Later
+                    </h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Remaining general details can be edited later by reception or counsellor 
-                      from the <strong>Patient Data</strong> section when time permits.
+                      Remaining general details can be edited later by reception
+                      or counsellor from the <strong>Patient Data</strong>{" "}
+                      section when time permits.
                     </p>
                   </div>
                 </div>
@@ -821,16 +989,20 @@ export default function RegisterPatientPage() {
               <Alert className="bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-800">
                 <Zap className="h-4 w-4 text-teal-600" />
                 <AlertDescription className="text-teal-700 dark:text-teal-300">
-                  This two-step process helps reduce wait times at reception while ensuring all necessary 
-                  information is eventually captured in the system.
+                  This two-step process helps reduce wait times at reception
+                  while ensuring all necessary information is eventually
+                  captured in the system.
                 </AlertDescription>
               </Alert>
 
               <div className="pt-4">
-<Button className="w-full bg-gradient-to-r from-teal-600 to-emerald-600" onClick={() => navigate('/reception/patients')}>
-                            <FileText className="h-4 w-4 mr-2" />
-Go to Patient Data
-                        </Button>
+                <Button
+                  className="w-full bg-gradient-to-r from-teal-600 to-emerald-600"
+                  onClick={() => navigate("/reception/patients")}
+                >
+                  <FileText className="h-4 w-4 mr-2" />
+                  Go to Patient Data
+                </Button>
               </div>
             </CardContent>
           </Card>

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { useAuth } from '@/lib/auth-context';
+import { getPharmacyInvoices } from '@/lib/hms-api';
 import type { Invoice, Patient } from '@/lib/types';
 import { PaymentBadge } from '@/components/status-badge';
 import { Search, FileText, Calendar } from 'lucide-react';
@@ -12,13 +14,68 @@ interface InvoiceWithPatient extends Invoice {
 }
 
 export default function InvoicesPage() {
+  const { accessToken } = useAuth();
   const [invoices, setInvoices] = useState<InvoiceWithPatient[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    // Invoice history needs a dedicated backend endpoint
-    setInvoices([]);
-  }, []);
+    if (!accessToken) return;
+
+    const loadInvoices = () => {
+      getPharmacyInvoices(accessToken)
+        .then((res) => {
+          const mapped: InvoiceWithPatient[] = (res.items || []).map((row) => ({
+            id: row.id,
+            visit_id: row.id,
+            patient_id: row.patient.id,
+            invoice_number: row.invoice_number,
+            invoice_date: row.invoice_date,
+            consultation_fee: row.consultation_fee,
+            medicine_total: row.medicine_total,
+            discount: row.discount,
+            tax: row.tax,
+            grand_total: row.grand_total,
+            payment_status: row.payment_status,
+            payment_method: row.payment_method,
+            notes: '',
+            created_at: row.invoice_date,
+            patient: {
+              id: row.patient.id,
+              registration_number: row.patient.registration_number,
+              patient_category: 'deaddiction',
+              full_name: row.patient.full_name,
+              date_of_birth: '',
+              gender: 'other',
+              phone: '',
+              address: '',
+              city: '',
+              state: '',
+              pincode: '',
+              addiction_type: 'other',
+              first_visit_date: row.invoice_date,
+              emergency_contact_name: '',
+              emergency_contact_phone: '',
+              emergency_contact_relation: '',
+              status: 'active',
+              created_at: row.invoice_date,
+              updated_at: row.invoice_date,
+            },
+          }));
+          setInvoices(mapped);
+        })
+        .catch(() => setInvoices([]));
+    };
+
+    loadInvoices();
+    const refreshTimer = window.setInterval(loadInvoices, 10000);
+    const onFocus = () => loadInvoices();
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [accessToken]);
 
   const filteredInvoices = invoices.filter((invoice) => {
     if (!searchQuery) return true;
