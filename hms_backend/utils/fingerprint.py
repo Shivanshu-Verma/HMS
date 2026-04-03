@@ -35,7 +35,12 @@ def _get_cipher() -> Fernet:
     except (ValueError, TypeError) as exc:
         raise HMSError(
             code='FINGERPRINT_ENCRYPTION_INVALID',
-            message='Fingerprint encryption key is invalid.',
+            message=(
+                'Fingerprint encryption key is invalid. '
+                'Expected a Fernet key, for example one generated with '
+                '`python -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"`.'
+            ),
             status_code=500,
         ) from exc
 

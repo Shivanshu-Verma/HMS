@@ -320,7 +320,7 @@ export default function PatientDataPage() {
     ]);
 
     // Create CSV content
-    const escapeCSV = (value: string | number) => {
+    const escapeCSV = (value: string | number | boolean) => {
       const str = String(value);
       if (str.includes(',') || str.includes('"') || str.includes('\n')) {
         return `"${str.replace(/"/g, '""')}"`;

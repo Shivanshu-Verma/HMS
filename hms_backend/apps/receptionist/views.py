@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from apps.auth_app.permissions import IsReceptionist
 from apps.patients.models import Patient, Visit
 from apps.patients.serializers import serialize_patient
+from apps.sessions.flow import get_active_session_stage, is_counsellor_stage, is_doctor_stage, is_pharmacy_stage
 from apps.sessions.models import ActiveSession
 from utils.pagination import parse_pagination_params, paginate_queryset
 from utils.response import paginated_response, success_response
@@ -126,12 +127,7 @@ class ReceptionistReportsView(APIView):
             elif category == 'deaddiction':
                 deaddiction_visits += 1
 
-            if session.status == 'dispensing':
-                stage = 'pharmacy'
-            elif session.counsellor_completed_at:
-                stage = 'doctor'
-            else:
-                stage = 'counsellor'
+            stage = get_active_session_stage(session)
 
             daily_items.append({
                 'id': f'active-{str(session.id)}',
@@ -230,20 +226,10 @@ class ReceptionistDashboardView(APIView):
         today_visits = today_active + completed_today
 
         # Status-based queue counts from active sessions
-        checked_in_count = active_sessions.filter(status='checked_in').count()
-        dispensing_count = active_sessions.filter(status='dispensing').count()
-
-        # For the stage breakdown we approximate:
-        # checked_in → at counsellor, dispensing → at pharmacy
-        # Counsellor-completed but not yet dispensing → at doctor (inferred)
-        counsellor_completed = active_sessions.filter(
-            counsellor_completed_at__exists=True,
-            status='checked_in',
-        ).count()
-
-        pending_counsellor = checked_in_count - counsellor_completed
-        pending_doctor = counsellor_completed
-        pending_pharmacy = dispensing_count
+        active_session_list = list(active_sessions)
+        pending_counsellor = sum(1 for session in active_session_list if is_counsellor_stage(session))
+        pending_doctor = sum(1 for session in active_session_list if is_doctor_stage(session))
+        pending_pharmacy = sum(1 for session in active_session_list if is_pharmacy_stage(session))
 
         payload = {
             'totalPatients': total_patients,
@@ -271,14 +257,7 @@ class ReceptionistQueueView(APIView):
         items = []
         for s in sessions:
             # Determine current stage
-            if s.status == 'completed':
-                stage = 'completed'
-            elif s.status == 'dispensing':
-                stage = 'pharmacy'
-            elif s.counsellor_completed_at:
-                stage = 'doctor'
-            else:
-                stage = 'counsellor'
+            stage = get_active_session_stage(s)
 
             items.append({
                 'session_id': str(s.id),

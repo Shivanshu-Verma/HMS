@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { getCounsellorReportSessions } from "@/lib/hms-api";
+import {
+  getCounsellorReportSessions,
+  type CounsellorReportSessionItem,
+} from "@/lib/hms-api";
 import {
   Card,
   CardContent,
@@ -84,7 +87,7 @@ export default function CounsellorReportsPage() {
           await getCounsellorReportSessions(accessToken);
 
         const mappedSessions: SessionWithPatient[] =
-          reportSessionsRes.items?.map((item) => ({
+          reportSessionsRes.items?.map((item: CounsellorReportSessionItem) => ({
             id: item.session_id,
             patient_id: item.patient_id,
             patient_name: item.patient_name || "Unknown",
@@ -129,9 +132,7 @@ export default function CounsellorReportsPage() {
     const highRisk = filtered.filter((s) => s.risk_level === "high").length;
     const mediumRisk = filtered.filter((s) => s.risk_level === "medium").length;
     const lowRisk = filtered.filter((s) => s.risk_level === "low").length;
-    const completed = filtered.filter(
-      (s) => s.session_status === "completed",
-    ).length;
+    const completed = filtered.filter((s) => Boolean(s.completed_at)).length;
 
     return {
       sessions: filtered,
@@ -169,9 +170,7 @@ export default function CounsellorReportsPage() {
     const highRisk = filtered.filter((s) => s.risk_level === "high").length;
     const mediumRisk = filtered.filter((s) => s.risk_level === "medium").length;
     const lowRisk = filtered.filter((s) => s.risk_level === "low").length;
-    const completed = filtered.filter(
-      (s) => s.session_status === "completed",
-    ).length;
+    const completed = filtered.filter((s) => Boolean(s.completed_at)).length;
     const daysWithSessions = Object.keys(byDay).length;
 
     return {
@@ -508,7 +507,7 @@ export default function CounsellorReportsPage() {
                             )}
                           </TableCell>
                           <TableCell>
-                            {s.session_status === "completed" ? (
+                            {s.completed_at ? (
                               <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
                                 Completed
                               </Badge>
@@ -896,7 +895,7 @@ export default function CounsellorReportsPage() {
                                 {s.patient_category || "unknown"}
                               </TableCell>
                               <TableCell>
-                                {s.session_status === "completed" ? (
+                                {s.completed_at ? (
                                   <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
                                     Completed
                                   </Badge>

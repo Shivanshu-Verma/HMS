@@ -66,7 +66,7 @@ class CheckinView(APIView):
                 message='This patient is marked as deceased and cannot be checked in.',
             )
 
-        if ActiveSession.objects(patient_id=patient.id).first():
+        if ActiveSession.objects(hospital_id=hospital_id, patient_id=patient.id).first():
             raise ConflictError(
                 code='SESSION_ALREADY_ACTIVE',
                 message='An active session already exists for this patient.',

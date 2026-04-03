@@ -7,21 +7,31 @@ pharmacy assignment, medicine search, and consultation history.
 import datetime
 import logging
 
-from rest_framework.views import APIView
 from bson import ObjectId
-from django.conf import settings
+from rest_framework.views import APIView
 
 from apps.auth_app.permissions import IsDoctor, IsDoctorOrPharmacy
-from apps.sessions.models import (
-    ActiveSession, ActiveDoctorStage, ActiveVitalSigns, ActivePrescriptionDraft,
-)
-from apps.patients.models import Visit, Patient, Medicine
-from apps.receptionist.serializers import serialize_active_session_for_queue
-from apps.patients.serializers import serialize_patient, serialize_visit_summary
 from apps.doctor.serializers import FindingsSerializer, PrescriptionsSerializer, serialize_medicine
-from utils.response import success_response, paginated_response
-from utils.pagination import parse_pagination_params, paginate_queryset
-from utils.exceptions import NotFoundError, ConflictError, HMSError
+from apps.patients.models import Medicine, Visit
+from apps.patients.serializers import serialize_patient, serialize_visit_summary
+from apps.receptionist.serializers import serialize_active_session_for_queue
+from apps.sessions.flow import is_doctor_stage
+from apps.sessions.models import (
+    ActiveDoctorStage,
+    ActivePrescriptionDraft,
+    ActiveSession,
+    ActiveVitalSigns,
+)
+from utils.exceptions import ConflictError, HMSError
+from utils.hospital_scope import (
+    get_medicine_for_hospital,
+    get_patient_for_hospital,
+    get_request_hospital_id,
+    get_request_user_id,
+    get_session_for_hospital,
+)
+from utils.pagination import paginate_queryset, parse_pagination_params
+from utils.response import paginated_response, success_response
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +57,14 @@ class DoctorQueueView(APIView):
         Returns:
             Response: List of active sessions awaiting doctor consultation.
         """
-        hospital_id = ObjectId(request.user.hospital_id)
+        hospital_id = get_request_hospital_id(request)
 
         sessions = ActiveSession.objects(
             hospital_id=hospital_id,
-            state__current_stage='doctor',
-            state__status='in_progress',
-        ).order_by('timestamps__counsellor_completed_at')
+            status='checked_in',
+            counsellor_completed_at__exists=True,
+            doctor_completed_at__exists=False,
+        ).order_by('counsellor_completed_at')
 
         serialized = [serialize_active_session_for_queue(s) for s in sessions]
         return success_response({'items': serialized, 'total': len(serialized)})
@@ -79,26 +90,19 @@ class StartConsultationView(APIView):
         Returns:
             Response: Updated session data.
         """
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
 
-        if session.state.current_stage != 'doctor':
+        if not is_doctor_stage(session):
             raise ConflictError(message="Session is not at the doctor stage.", code="WRONG_STAGE")
 
         now = datetime.datetime.utcnow()
-        doctor_id = ObjectId(request.user.id)
+        doctor_id = get_request_user_id(request)
 
-        session.state.stage_status = 'in_progress'
-        session.assignments.doctor_id = doctor_id
-        session.timestamps.doctor_started_at = now
-        session.timestamps.updated_at = now
+        session.assigned_doctor_id = doctor_id
+        if not session.doctor_started_at:
+            session.doctor_started_at = now
         session.updated_at = now
-
-        if doctor_id not in session.participants:
-            session.participants.append(doctor_id)
-
         session.save()
 
         return success_response(serialize_active_session_for_queue(session))
@@ -124,21 +128,12 @@ class ConsultationContextView(APIView):
         Returns:
             Response: Full consultation context.
         """
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
-
-        # Get full patient details
-        patient = None
-        try:
-            patient_doc = Patient.objects.get(id=session.patient_id)
-            patient = serialize_patient(patient_doc)
-        except Patient.DoesNotExist:
-            pass
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
+        patient_doc = get_patient_for_hospital(session.patient_id, hospital_id)
+        patient = serialize_patient(patient_doc)
 
         # Get previous visits
-        hospital_id = ObjectId(request.user.hospital_id)
         previous_visits = Visit.objects(
             hospital_id=hospital_id,
             patient_id=session.patient_id,
@@ -171,12 +166,10 @@ class SaveFindingsView(APIView):
         Returns:
             Response: Updated session data.
         """
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
 
-        if session.state.current_stage != 'doctor':
+        if not is_doctor_stage(session):
             raise ConflictError(message="Session is not at the doctor stage.", code="WRONG_STAGE")
 
         serializer = FindingsSerializer(data=request.data)
@@ -197,7 +190,7 @@ class SaveFindingsView(APIView):
         if data.get('next_visit_date'):
             next_visit_date = datetime.datetime.combine(data['next_visit_date'], datetime.time())
 
-        # Preserve existing prescriptions if doctor stage already has them
+        # Preserve existing prescriptions if doctor stage already has them.
         existing_prescriptions = []
         if session.doctor_stage and session.doctor_stage.prescriptions:
             existing_prescriptions = session.doctor_stage.prescriptions
@@ -212,7 +205,8 @@ class SaveFindingsView(APIView):
         )
 
         now = datetime.datetime.utcnow()
-        session.timestamps.updated_at = now
+        session.assigned_doctor_id = session.assigned_doctor_id or get_request_user_id(request)
+        session.doctor_started_at = session.doctor_started_at or now
         session.updated_at = now
         session.save()
 
@@ -239,12 +233,10 @@ class SavePrescriptionsView(APIView):
         Returns:
             Response: Updated session data.
         """
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
 
-        if session.state.current_stage != 'doctor':
+        if not is_doctor_stage(session):
             raise ConflictError(message="Session is not at the doctor stage.", code="WRONG_STAGE")
 
         serializer = PrescriptionsSerializer(data=request.data)
@@ -252,8 +244,13 @@ class SavePrescriptionsView(APIView):
 
         prescriptions = []
         for item in serializer.validated_data['prescriptions']:
+            medicine = get_medicine_for_hospital(
+                item['medicine_id'],
+                hospital_id,
+                is_active=True,
+            )
             prescriptions.append(ActivePrescriptionDraft(
-                medicine_id=ObjectId(item['medicine_id']),
+                medicine_id=medicine.id,
                 dosage=item['dosage'],
                 frequency=item['frequency'],
                 duration_days=item['duration_days'],
@@ -267,7 +264,8 @@ class SavePrescriptionsView(APIView):
         session.doctor_stage.prescriptions = prescriptions
 
         now = datetime.datetime.utcnow()
-        session.timestamps.updated_at = now
+        session.assigned_doctor_id = session.assigned_doctor_id or get_request_user_id(request)
+        session.doctor_started_at = session.doctor_started_at or now
         session.updated_at = now
         session.save()
 
@@ -294,12 +292,10 @@ class AssignPharmacyView(APIView):
         Returns:
             Response: Updated session data.
         """
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message="Session not found.", code="SESSION_NOT_FOUND")
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
 
-        if session.state.current_stage != 'doctor':
+        if not is_doctor_stage(session):
             raise ConflictError(message="Session is not at the doctor stage.", code="WRONG_STAGE")
 
         if not session.doctor_stage or not session.doctor_stage.diagnosis:
@@ -310,14 +306,14 @@ class AssignPharmacyView(APIView):
             )
 
         now = datetime.datetime.utcnow()
-        doctor_id = ObjectId(request.user.id)
+        doctor_id = get_request_user_id(request)
 
         session.doctor_stage.completed_by = doctor_id
         session.doctor_stage.completed_at = now
-        session.state.current_stage = 'pharmacy'
-        session.state.stage_status = 'waiting'
-        session.timestamps.doctor_completed_at = now
-        session.timestamps.updated_at = now
+        session.assigned_doctor_id = doctor_id
+        session.doctor_started_at = session.doctor_started_at or now
+        session.doctor_completed_at = now
+        session.status = 'dispensing'
         session.updated_at = now
         session.save()
 
@@ -344,7 +340,7 @@ class MedicineSearchView(APIView):
             Response: List of matching active medicines.
         """
         query = request.query_params.get('q', '').strip()
-        hospital_id = ObjectId(request.user.hospital_id)
+        hospital_id = get_request_hospital_id(request)
 
         medicines = Medicine.objects(
             hospital_id=hospital_id,
@@ -389,7 +385,7 @@ class DoctorHistoryView(APIView):
             Response: Paginated archived visit summaries.
         """
         hospital_id = ObjectId(request.user.hospital_id)
-        doctor_id = ObjectId(request.user.id)
+        doctor_id = get_request_user_id(request)
         page, page_size = parse_pagination_params(request)
 
         visits = Visit.objects(

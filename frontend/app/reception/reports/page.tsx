@@ -752,12 +752,12 @@ export default function ReportsPage() {
                     </TableHeader>
                     <TableBody>
                       {dailyReportData.visits
-                        .sort((a, b) =>
+                        .sort((a: VisitWithPatient, b: VisitWithPatient) =>
                           (a.patient?.registration_number || "").localeCompare(
                             b.patient?.registration_number || "",
                           ),
                         )
-                        .map((visit) => (
+                        .map((visit: VisitWithPatient) => (
                           <TableRow
                             key={visit.id}
                             className="hover:bg-[#0d7377]/5"

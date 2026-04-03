@@ -284,7 +284,13 @@ class Patient(Document):
         'indexes': [
             {'fields': ['hospital_id', 'patient_uid'], 'unique': True},
             {'fields': ['hospital_id', 'registration_number'], 'unique': True},
-            {'fields': ['hospital_id', 'biometric.fingerprint_template_sha256'], 'unique': True, 'sparse': True},
+            {
+                'fields': ['hospital_id', 'biometric.fingerprint_template_sha256'],
+                'unique': True,
+                'partialFilterExpression': {
+                    'biometric.fingerprint_template_sha256': {'$type': 'string'},
+                },
+            },
             {'fields': ['hospital_id', 'phone']},
             {'fields': ['hospital_id', 'status', '-updated_at']},
             {'fields': ['status']},

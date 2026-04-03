@@ -9,6 +9,7 @@ export interface User {
   phone?: string;
   is_active: boolean;
   created_at: string;
+  updated_at?: string;
 }
 
 // Patient types
@@ -156,7 +157,7 @@ export interface Patient {
 }
 
 // Visit types
-export type VisitStage = 'checkin' | 'counsellor' | 'doctor' | 'pharmacy' | 'completed';
+export type VisitStage = 'checkin' | 'reception' | 'counsellor' | 'doctor' | 'pharmacy' | 'completed';
 export type VisitStatus = 'in_progress' | 'completed' | 'cancelled';
 
 export interface Visit {
@@ -177,6 +178,7 @@ export interface Visit {
   assigned_doctor_id?: string;
   pharmacist_id?: string;
   status: VisitStatus;
+  created_at?: string;
 }
 
 // Counsellor session
@@ -227,13 +229,17 @@ export interface Medicine {
   generic_name?: string;
   category?: string;
   manufacturer?: string;
-  unit: MedicineUnit;
-  price_per_unit: number;
+  unit?: MedicineUnit;
+  price_per_unit?: number;
+  unit_price?: number;
   stock_quantity: number;
   reorder_level: number;
   expiry_date?: string;
   is_active: boolean;
-  created_at: string;
+  created_at?: string;
+  dosage_form?: string;
+  strength?: string;
+  batch_number?: string;
 }
 
 export interface Prescription {

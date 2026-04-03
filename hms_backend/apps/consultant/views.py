@@ -7,11 +7,18 @@ from rest_framework import serializers
 from rest_framework.views import APIView
 
 from apps.auth_app.permissions import IsConsultant
+from apps.consultant.serializers import SessionNotesSerializer
 from apps.patients.models import Patient, StatusUpdate, Visit
 from apps.patients.serializers import serialize_patient
-from apps.consultant.serializers import SessionNotesSerializer
+from apps.sessions.flow import is_counsellor_stage
 from apps.sessions.models import ActiveSession
-from utils.exceptions import NotFoundError
+from utils.exceptions import ConflictError
+from utils.hospital_scope import (
+    get_patient_for_hospital,
+    get_request_hospital_id,
+    get_request_user_id,
+    get_session_for_hospital,
+)
 from utils.pagination import parse_pagination_params, paginate_queryset
 from utils.response import success_response, paginated_response
 
@@ -28,6 +35,7 @@ class CounsellorFollowupView(APIView):
     permission_classes = [IsConsultant]
 
     def get(self, request):
+        hospital_id = get_request_hospital_id(request)
         page = max(1, int(request.query_params.get('page', 1)))
         page_size = max(1, int(request.query_params.get('pageSize', 20)))
         skip = (page - 1) * page_size
@@ -37,6 +45,7 @@ class CounsellorFollowupView(APIView):
         pipeline = [
             {
                 '$match': {
+                    'hospital_id': hospital_id,
                     'visit_type': {'$in': ['standard', 'debt_payment']},
                 }
             },
@@ -62,6 +71,7 @@ class CounsellorFollowupView(APIView):
             {'$unwind': '$patient'},
             {
                 '$match': {
+                    'patient.hospital_id': hospital_id,
                     'patient.status': 'active',
                 }
             },
@@ -131,13 +141,20 @@ class CounsellorQueueView(APIView):
     permission_classes = [IsConsultant]
 
     def get(self, request):
+        hospital_id = get_request_hospital_id(request)
         sessions = ActiveSession.objects(
-            status__in=['checked_in', 'counsellor']
+            hospital_id=hospital_id,
+            status='checked_in',
         ).order_by('checked_in_at')
 
         items = []
         for session in sessions:
-            patient = Patient.objects(id=session.patient_id).only('outstanding_debt').first()
+            if not is_counsellor_stage(session):
+                continue
+            patient = Patient.objects(
+                id=session.patient_id,
+                hospital_id=hospital_id,
+            ).only('outstanding_debt').first()
             items.append(
                 {
                     'session_id': str(session.id),
@@ -159,14 +176,9 @@ class CounsellorSessionDetailView(APIView):
     permission_classes = [IsConsultant]
 
     def get(self, request, session_id):
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message='Session not found.', code='SESSION_NOT_FOUND')
-
-        patient = Patient.objects(id=session.patient_id).first()
-        if not patient:
-            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
+        patient = get_patient_for_hospital(session.patient_id, hospital_id)
 
         return success_response(
             {
@@ -198,24 +210,23 @@ class CounsellorSessionCompleteView(APIView):
         serializer = SessionNotesSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message='Session not found.', code='SESSION_NOT_FOUND')
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
+        if not is_counsellor_stage(session):
+            raise ConflictError(message='Session is not at the counsellor stage.', code='WRONG_STAGE')
 
         now = datetime.datetime.utcnow()
 
         if not session.counsellor_started_at:
             session.counsellor_started_at = now
 
-        session.assigned_counsellor_id = ObjectId(request.user.id)
+        session.assigned_counsellor_id = get_request_user_id(request)
         session.counsellor_session_notes = serializer.validated_data['session_notes']
         session.counsellor_mood_assessment = serializer.validated_data.get('mood_assessment', 5)
         session.counsellor_risk_level = serializer.validated_data['risk_level']
         session.counsellor_recommendations = serializer.validated_data.get('recommendations', '')
         session.counsellor_follow_up_required = serializer.validated_data.get('follow_up_required', True)
         session.counsellor_completed_at = now
-        session.status = 'completed'
         session.updated_at = now
         session.save()
 
@@ -237,17 +248,15 @@ class CounsellorPatientStatusView(APIView):
         serializer = StatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            patient = Patient.objects.get(id=ObjectId(patient_id))
-        except Patient.DoesNotExist:
-            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        hospital_id = get_request_hospital_id(request)
+        patient = get_patient_for_hospital(patient_id, hospital_id)
 
         new_status = serializer.validated_data['status']
         old_status = patient.status
         now = datetime.datetime.utcnow()
 
         entry = StatusUpdate(
-            updated_by=ObjectId(request.user.id),
+            updated_by=get_request_user_id(request),
             updated_by_name=request.user.full_name,
             previous_status=old_status,
             new_status=new_status,
@@ -281,19 +290,23 @@ class CounsellorReportsView(APIView):
     permission_classes = [IsConsultant]
 
     def get(self, request):
+        hospital_id = get_request_hospital_id(request)
+        user_id = get_request_user_id(request)
         now = datetime.datetime.utcnow()
         today = now.date()
 
         pipeline = [
             {
                 '$match': {
-                    'status_updates.updated_by': ObjectId(request.user.id),
+                    'hospital_id': hospital_id,
+                    'status_updates.updated_by': user_id,
                 }
             },
             {'$unwind': '$status_updates'},
             {
                 '$match': {
-                    'status_updates.updated_by': ObjectId(request.user.id),
+                    'hospital_id': hospital_id,
+                    'status_updates.updated_by': user_id,
                 }
             },
             {
@@ -378,7 +391,10 @@ class CounsellorReportSessionsView(APIView):
 
         items = []
         for session in sessions:
-            patient = Patient.objects(id=session.patient_id).only(
+            patient = Patient.objects(
+                id=session.patient_id,
+                hospital_id=hospital_id,
+            ).only(
                 'patient_category',
                 'registration_number',
                 'full_name',

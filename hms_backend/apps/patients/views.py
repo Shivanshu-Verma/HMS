@@ -1,5 +1,6 @@
 """Patient module endpoints for registration, lookup, and profile updates."""
 import datetime
+import re
 import uuid
 
 from bson import ObjectId
@@ -32,6 +33,7 @@ from utils.fingerprint import (
     encrypt_fingerprint_template,
     hash_fingerprint_template,
 )
+from utils.hospital_scope import get_patient_for_hospital, get_request_hospital_id
 from utils.response import success_response
 
 
@@ -81,6 +83,26 @@ def _mark_fingerprint_reenrollment_if_needed(patient: Patient) -> None:
     biometric.fingerprint_reenrollment_required = True
     patient.updated_at = datetime.datetime.utcnow()
     patient.save()
+
+
+def _normalize_digits(value: str) -> str:
+    return ''.join(ch for ch in value if ch.isdigit())
+
+
+def _build_lookup_query(search_text: str) -> dict:
+    pattern = re.escape(search_text)
+    digits = _normalize_digits(search_text)
+    clauses = [
+        {'registration_number': {'$regex': pattern, '$options': 'i'}},
+        {'full_name': {'$regex': pattern, '$options': 'i'}},
+    ]
+
+    if digits:
+        clauses.append({'phone': {'$regex': re.escape(digits), '$options': 'i'}})
+        if len(digits) >= 4:
+            clauses.append({'aadhaar_number_last4': digits[-4:]})
+
+    return {'$or': clauses}
 
 
 class RegisterPatientView(APIView):
@@ -164,10 +186,7 @@ class UpdatePatientGeneralView(APIView):
         serializer = PatientGeneralDataSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            patient = Patient.objects.get(id=ObjectId(patient_id))
-        except Patient.DoesNotExist:
-            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        patient = get_patient_for_hospital(patient_id, get_request_hospital_id(request))
 
         data = serializer.validated_data
 
@@ -218,10 +237,7 @@ class GetPatientView(APIView):
     permission_classes = [IsReceptionistOrConsultantOrDoctor]
 
     def get(self, request, patient_id):
-        try:
-            patient = Patient.objects.get(id=ObjectId(patient_id))
-        except Patient.DoesNotExist:
-            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        patient = get_patient_for_hospital(patient_id, get_request_hospital_id(request))
         _mark_fingerprint_reenrollment_if_needed(patient)
         return success_response(serialize_patient(patient))
 
@@ -236,18 +252,29 @@ class PatientLookupView(APIView):
         serializer.is_valid(raise_exception=True)
         query = serializer.validated_data
 
-        hospital_id = ObjectId(request.user.hospital_id)
+        hospital_id = get_request_hospital_id(request)
+        registration_number = query.get('registration_number', '')
+        search_text = query.get('q') or registration_number
 
-        patient = Patient.objects(
-            hospital_id=hospital_id,
-            registration_number=query['registration_number'],
-        ).first()
+        patients = Patient.objects(hospital_id=hospital_id)
+        if registration_number:
+            patients = patients.filter(registration_number=registration_number)
+        else:
+            patients = patients.filter(__raw__=_build_lookup_query(search_text))
 
-        if not patient:
+        items = list(patients.order_by('full_name').limit(20))
+        for patient in items:
+            _mark_fingerprint_reenrollment_if_needed(patient)
+
+        if not items:
             raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
 
-        _mark_fingerprint_reenrollment_if_needed(patient)
-        return success_response(serialize_patient(patient))
+        return success_response(
+            {
+                'items': [serialize_patient(patient) for patient in items],
+                'total': len(items),
+            }
+        )
 
 
 class FingerprintTemplateView(APIView):
@@ -270,10 +297,7 @@ class FingerprintTemplateView(APIView):
             NotFoundError: If the patient does not exist.
             HMSError: If the patient must re-enroll or has no decryptable template.
         """
-        try:
-            patient = Patient.objects.get(id=ObjectId(patient_id))
-        except Patient.DoesNotExist:
-            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        patient = get_patient_for_hospital(patient_id, get_request_hospital_id(request))
 
         _mark_fingerprint_reenrollment_if_needed(patient)
         biometric = patient.biometric

@@ -17,8 +17,16 @@ from apps.pharmacy.serializers import (
 )
 from apps.pharmacy.services import PaymentValidator
 from apps.sessions.archive_service import ArchiveService
+from apps.sessions.flow import is_pharmacy_stage
 from apps.sessions.models import ActiveSession, DispenseItem as ActiveDispenseItem
 from utils.exceptions import ConflictError, NotFoundError, ValidationError
+from utils.hospital_scope import (
+    get_medicine_for_hospital,
+    get_patient_for_hospital,
+    get_request_hospital_id,
+    get_request_user_id,
+    get_session_for_hospital,
+)
 from utils.pagination import parse_pagination_params, paginate_queryset
 from utils.response import success_response
 
@@ -36,17 +44,34 @@ def _serialize_medicine(med: Medicine) -> dict:
     }
 
 
+def _payment_value(payment, field: str) -> float:
+    """Read payment fields from either a dict or a MongoEngine embedded document."""
+
+    if isinstance(payment, dict):
+        return float(payment.get(field, 0.0) or 0.0)
+    return float(getattr(payment, field, 0.0) or 0.0)
+
+
 class PharmacyQueueView(APIView):
     """List all currently checked-in active sessions for pharmacy processing."""
 
     permission_classes = [IsPharmacy]
 
     def get(self, request):
-        sessions = ActiveSession.objects.order_by('checked_in_at')
+        hospital_id = get_request_hospital_id(request)
+        sessions = ActiveSession.objects(
+            hospital_id=hospital_id,
+            status='dispensing',
+        ).order_by('checked_in_at')
 
         items = []
         for session in sessions:
-            patient = Patient.objects(id=session.patient_id).only('outstanding_debt').first()
+            if not is_pharmacy_stage(session):
+                continue
+            patient = Patient.objects(
+                id=session.patient_id,
+                hospital_id=hospital_id,
+            ).only('outstanding_debt').first()
             items.append(
                 {
                     'session_id': str(session.id),
@@ -68,14 +93,11 @@ class PharmacySessionDetailView(APIView):
     permission_classes = [IsPharmacy]
 
     def get(self, request, session_id):
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message='Session not found.', code='SESSION_NOT_FOUND')
-
-        patient = Patient.objects(id=session.patient_id).first()
-        if not patient:
-            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
+        if not is_pharmacy_stage(session):
+            raise ConflictError(code='WRONG_STAGE', message='Session is not at the pharmacy stage.')
+        patient = get_patient_for_hospital(session.patient_id, hospital_id)
 
         return success_response(
             {
@@ -110,11 +132,16 @@ class PharmacyMedicineSearchView(APIView):
     permission_classes = [IsPharmacy]
 
     def get(self, request):
+        hospital_id = get_request_hospital_id(request)
         q = request.query_params.get('q', '').strip()
         page = max(1, int(request.query_params.get('page', 1)))
         page_size = max(1, int(request.query_params.get('pageSize', 20)))
 
-        query = Medicine.objects(is_active=True, stock_quantity__gt=0)
+        query = Medicine.objects(
+            hospital_id=hospital_id,
+            is_active=True,
+            stock_quantity__gt=0,
+        )
         if q:
             query = query.filter(
                 __raw__={
@@ -158,16 +185,18 @@ class PharmacyDispenseView(APIView):
         serializer = DispenseSubmitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            session = ActiveSession.objects.get(id=ObjectId(session_id))
-        except ActiveSession.DoesNotExist:
-            raise NotFoundError(message='Session not found.', code='SESSION_NOT_FOUND')
+        hospital_id = get_request_hospital_id(request)
+        session = get_session_for_hospital(session_id, hospital_id)
+        if not is_pharmacy_stage(session):
+            raise ConflictError(code='WRONG_STAGE', message='Session is not at the pharmacy stage.')
 
         active_items = []
         for item in serializer.validated_data['items']:
-            medicine = Medicine.objects(id=ObjectId(item['medicine_id']), is_active=True).first()
-            if not medicine:
-                raise NotFoundError(message='Medicine not found.', code='MEDICINE_NOT_FOUND')
+            medicine = get_medicine_for_hospital(
+                item['medicine_id'],
+                hospital_id,
+                is_active=True,
+            )
             if medicine.stock_quantity < item['quantity']:
                 raise ConflictError(
                     code='INSUFFICIENT_STOCK',
@@ -187,6 +216,7 @@ class PharmacyDispenseView(APIView):
 
         session.dispense_items = active_items
         session.status = 'dispensing'
+        session.pharmacy_started_at = session.pharmacy_started_at or datetime.datetime.utcnow()
         session.updated_at = datetime.datetime.utcnow()
         session.save()
 
@@ -221,8 +251,9 @@ class PharmacyCheckoutView(APIView):
 
         result = ArchiveService.close_visit(
             session_id=session_id,
+            hospital_id=get_request_hospital_id(request),
             payment_data=serializer.validated_data['payment'],
-            pharmacist_id=ObjectId(request.user.id),
+            pharmacist_id=get_request_user_id(request),
             pharmacist_name=request.user.full_name,
         )
         return success_response(result)
@@ -237,6 +268,7 @@ class PharmacyDebtPaymentView(APIView):
         serializer = DebtPaymentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        hospital_id = get_request_hospital_id(request)
         patient_id = ObjectId(serializer.validated_data['patient_id'])
         payment = serializer.validated_data['payment']
 
@@ -250,9 +282,7 @@ class PharmacyDebtPaymentView(APIView):
                 message='cash_amount + online_amount must equal debt_cleared.',
             )
 
-        patient = Patient.objects(id=patient_id).first()
-        if not patient:
-            raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
+        patient = get_patient_for_hospital(patient_id, hospital_id)
 
         if debt_cleared > float(patient.outstanding_debt or 0.0) + PaymentValidator.TOLERANCE:
             raise ValidationError(code='DEBT_CLEARED_EXCEEDS_OUTSTANDING', message='debt_cleared exceeds outstanding debt.')
@@ -272,7 +302,7 @@ class PharmacyDebtPaymentView(APIView):
             visit_date=datetime.datetime.utcnow(),
             checked_in_by=None,
             checked_in_by_name='debt-payment',
-            dispensed_by=ObjectId(request.user.id),
+            dispensed_by=get_request_user_id(request),
             dispensed_by_name=request.user.full_name,
             dispense_items=[],
             medicines_total=0.0,
@@ -309,7 +339,8 @@ class PharmacyInventoryView(APIView):
         page = max(1, int(request.query_params.get('page', 1)))
         page_size = max(1, int(request.query_params.get('pageSize', 20)))
 
-        query = Medicine.objects
+        hospital_id = get_request_hospital_id(request)
+        query = Medicine.objects(hospital_id=hospital_id)
         if q:
             query = query.filter(name__icontains=q)
         if category:
@@ -358,9 +389,8 @@ class PharmacyInventoryItemView(APIView):
         serializer = MedicineUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
-        medicine = Medicine.objects(id=ObjectId(medicine_id)).first()
-        if not medicine:
-            raise NotFoundError(message='Medicine not found.', code='MEDICINE_NOT_FOUND')
+        hospital_id = get_request_hospital_id(request)
+        medicine = get_medicine_for_hospital(medicine_id, hospital_id)
 
         for field in ['name', 'category', 'unit', 'unit_price', 'is_active']:
             if field in serializer.validated_data:
@@ -384,9 +414,8 @@ class PharmacyAddStockView(APIView):
         serializer = AddStockSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        medicine = Medicine.objects(id=ObjectId(medicine_id)).first()
-        if not medicine:
-            raise NotFoundError(message='Medicine not found.', code='MEDICINE_NOT_FOUND')
+        hospital_id = get_request_hospital_id(request)
+        medicine = get_medicine_for_hospital(medicine_id, hospital_id)
 
         medicine.stock_quantity += serializer.validated_data['quantity_to_add']
         medicine.updated_at = datetime.datetime.utcnow()
@@ -416,11 +445,11 @@ class PharmacyReportsView(APIView):
             key = visit.visit_date.date()
             payment = visit.payment or {}
             day_stats[key]['count'] += 1
-            day_stats[key]['revenue'] += float(payment.get('cash_amount', 0.0) + payment.get('online_amount', 0.0))
-            day_stats[key]['cash'] += float(payment.get('cash_amount', 0.0))
-            day_stats[key]['online'] += float(payment.get('online_amount', 0.0))
-            day_stats[key]['debt_added'] += float(payment.get('new_debt', 0.0))
-            day_stats[key]['debt_cleared'] += float(payment.get('debt_cleared', 0.0))
+            day_stats[key]['revenue'] += _payment_value(payment, 'cash_amount') + _payment_value(payment, 'online_amount')
+            day_stats[key]['cash'] += _payment_value(payment, 'cash_amount')
+            day_stats[key]['online'] += _payment_value(payment, 'online_amount')
+            day_stats[key]['debt_added'] += _payment_value(payment, 'new_debt')
+            day_stats[key]['debt_cleared'] += _payment_value(payment, 'debt_cleared')
 
         daily = day_stats.get(today, {'count': 0, 'revenue': 0.0, 'cash': 0.0, 'online': 0.0, 'debt_added': 0.0, 'debt_cleared': 0.0})
 

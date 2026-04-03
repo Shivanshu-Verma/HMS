@@ -48,13 +48,16 @@ class PatientGeneralDataSerializer(serializers.Serializer):
 
 
 class PatientLookupSerializer(serializers.Serializer):
-    """Query payload for patient lookup by registration number."""
+    """Query payload for patient lookup by search text or registration number."""
 
-    registration_number = serializers.CharField(required=True)
+    q = serializers.CharField(required=False, allow_blank=True)
+    registration_number = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
-        if not attrs.get('registration_number'):
-            raise serializers.ValidationError('registration_number is required.')
+        attrs['q'] = (attrs.get('q') or '').strip()
+        attrs['registration_number'] = (attrs.get('registration_number') or '').strip()
+        if not attrs['q'] and not attrs['registration_number']:
+            raise serializers.ValidationError('q or registration_number is required.')
         return attrs
 
 

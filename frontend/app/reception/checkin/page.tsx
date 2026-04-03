@@ -29,7 +29,6 @@ import {
   MapPin,
   Calendar,
   CreditCard,
-  Hash,
   Users,
   Camera,
   ShieldCheck,
@@ -44,7 +43,7 @@ interface LookupPatient {
   phone: string;
   date_of_birth: string;
   status: 'active' | 'inactive' | 'dead';
-  aadhaar_number?: string;
+  aadhaar_last4?: string;
   address?: string;
   emergency_contact_phone?: string;
   relative_phone?: string;
@@ -80,20 +79,33 @@ export default function CheckinPage() {
       return;
     }
 
-    lookupPatient(accessToken, { registration_number: searchQuery.trim() })
-      .then((patient) => {
-        const mapped: LookupPatient = {
+    lookupPatient(accessToken, { q: searchQuery.trim() })
+      .then((result) => {
+        const mapped: LookupPatient[] = (result.items || []).map((patient) => ({
           id: patient.patient_id,
           registration_number: patient.registration_number,
           full_name: patient.full_name,
           phone: patient.phone_number,
           date_of_birth: patient.date_of_birth,
           status: patient.status,
-          address: typeof patient.address_line1 === 'string' ? patient.address_line1 : undefined,
+          aadhaar_last4:
+            typeof patient.aadhaar_number_last4 === 'string'
+              ? patient.aadhaar_number_last4
+              : undefined,
+          address:
+            typeof patient.address_line1 === 'string'
+              ? patient.address_line1
+              : undefined,
           emergency_contact_phone:
-            typeof patient.emergency_contact_phone === 'string' ? patient.emergency_contact_phone : undefined,
-        };
-        setSearchResults([mapped]);
+            typeof patient.emergency_contact_phone === 'string'
+              ? patient.emergency_contact_phone
+              : undefined,
+          relative_phone:
+            typeof patient.relative_phone === 'string'
+              ? patient.relative_phone
+              : undefined,
+        }));
+        setSearchResults(mapped);
       })
       .catch((error) => {
         setSearchResults([]);
@@ -190,9 +202,9 @@ export default function CheckinPage() {
   };
 
   // Format Aadhaar for display
-  const formatAadhaarDisplay = (aadhaar: string | undefined) => {
-    if (!aadhaar) return 'Not provided';
-    const masked = 'XXXX XXXX ' + aadhaar.slice(-4);
+  const formatAadhaarDisplay = (aadhaarLast4: string | undefined) => {
+    if (!aadhaarLast4) return 'Not provided';
+    const masked = 'XXXX XXXX ' + aadhaarLast4.slice(-4);
     return masked;
   };
 
@@ -449,7 +461,7 @@ export default function CheckinPage() {
                       </div>
                       <div className="flex-1">
                         <p className="text-xs text-muted-foreground">Aadhaar Number</p>
-                        <p className="font-mono font-medium">{formatAadhaarDisplay(selectedPatient.aadhaar_number)}</p>
+                        <p className="font-mono font-medium">{formatAadhaarDisplay(selectedPatient.aadhaar_last4)}</p>
                       </div>
                     </div>
 

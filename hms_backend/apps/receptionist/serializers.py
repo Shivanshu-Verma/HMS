@@ -5,6 +5,8 @@ Handles input validation for visit creation and active queue serialization.
 """
 from rest_framework import serializers
 
+from apps.sessions.flow import get_active_session_stage
+
 
 class CreateVisitSerializer(serializers.Serializer):
     """Validates visit creation input from the receptionist."""
@@ -28,50 +30,53 @@ def serialize_active_session_for_queue(session_doc) -> dict:
     Returns:
         dict: Session data shaped for frontend queue/dashboard rendering.
     """
-    snapshot = session_doc.patient_snapshot
+    current_stage = get_active_session_stage(session_doc)
+    if current_stage == 'doctor':
+        stage_status = 'in_progress' if session_doc.doctor_started_at else 'waiting'
+    elif current_stage == 'counsellor':
+        stage_status = 'in_progress' if session_doc.counsellor_started_at else 'waiting'
+    elif current_stage == 'pharmacy':
+        stage_status = 'in_progress'
+    else:
+        stage_status = 'completed' if session_doc.status == 'completed' else 'unknown'
+
     return {
         'id': str(session_doc.id),
-        'active_visit_uid': session_doc.active_visit_uid,
+        'session_id': str(session_doc.id),
         'patient_id': str(session_doc.patient_id),
-        'visit_number': session_doc.visit_number,
-        'visit_date': session_doc.visit_date.isoformat() if session_doc.visit_date else None,
-        'current_stage': session_doc.state.current_stage if session_doc.state else None,
-        'stage_status': session_doc.state.stage_status if session_doc.state else None,
-        'status': session_doc.state.status if session_doc.state else None,
-        'checkin_time': session_doc.timestamps.checkin_at.isoformat() if session_doc.timestamps and session_doc.timestamps.checkin_at else None,
-        'counsellor_start_time': session_doc.timestamps.counsellor_started_at.isoformat() if session_doc.timestamps and session_doc.timestamps.counsellor_started_at else None,
-        'counsellor_end_time': session_doc.timestamps.counsellor_completed_at.isoformat() if session_doc.timestamps and session_doc.timestamps.counsellor_completed_at else None,
-        'doctor_start_time': session_doc.timestamps.doctor_started_at.isoformat() if session_doc.timestamps and session_doc.timestamps.doctor_started_at else None,
-        'doctor_end_time': session_doc.timestamps.doctor_completed_at.isoformat() if session_doc.timestamps and session_doc.timestamps.doctor_completed_at else None,
-        'pharmacy_time': session_doc.timestamps.pharmacy_started_at.isoformat() if session_doc.timestamps and session_doc.timestamps.pharmacy_started_at else None,
+        'patient_name': session_doc.patient_name,
+        'current_stage': current_stage,
+        'stage_status': stage_status,
+        'status': session_doc.status,
+        'checkin_time': session_doc.checked_in_at.isoformat() if session_doc.checked_in_at else None,
+        'checked_in_at': session_doc.checked_in_at.isoformat() if session_doc.checked_in_at else None,
+        'checked_in_by_name': session_doc.checked_in_by_name,
+        'counsellor_start_time': session_doc.counsellor_started_at.isoformat() if session_doc.counsellor_started_at else None,
+        'counsellor_end_time': session_doc.counsellor_completed_at.isoformat() if session_doc.counsellor_completed_at else None,
+        'doctor_start_time': session_doc.doctor_started_at.isoformat() if session_doc.doctor_started_at else None,
+        'doctor_end_time': session_doc.doctor_completed_at.isoformat() if session_doc.doctor_completed_at else None,
+        'pharmacy_time': session_doc.pharmacy_started_at.isoformat() if session_doc.pharmacy_started_at else None,
         'patient': {
             'id': str(session_doc.patient_id),
-            'registration_number': snapshot.registration_number if snapshot else None,
-            'full_name': snapshot.full_name if snapshot else None,
-            'phone': snapshot.phone if snapshot else None,
-            'gender': snapshot.gender if snapshot else None,
-            'date_of_birth': snapshot.date_of_birth.isoformat() if snapshot and snapshot.date_of_birth else None,
-            'addiction_type': snapshot.addiction_type if snapshot else None,
-            'allergies': snapshot.allergies if snapshot else None,
-            'medical_history': snapshot.medical_history if snapshot else None,
-        } if snapshot else None,
-        'counsellor_stage': _serialize_counsellor_stage(session_doc.counsellor_stage),
+            'full_name': session_doc.patient_name,
+        },
+        'counsellor_stage': _serialize_counsellor_stage(session_doc),
         'doctor_stage': _serialize_doctor_stage(session_doc.doctor_stage),
     }
 
 
-def _serialize_counsellor_stage(stage) -> dict | None:
-    """Serialize active counsellor stage data."""
-    if not stage:
+def _serialize_counsellor_stage(session_doc) -> dict | None:
+    """Serialize active counsellor fields from the flat active session."""
+
+    if not session_doc.counsellor_completed_at and not session_doc.counsellor_session_notes:
         return None
     return {
-        'session_notes': stage.session_notes,
-        'mood_assessment': stage.mood_assessment,
-        'risk_level': stage.risk_level,
-        'recommendations': stage.recommendations,
-        'follow_up_required': stage.follow_up_required,
-        'session_duration_minutes': stage.session_duration_minutes,
-        'completed_at': stage.completed_at.isoformat() if stage.completed_at else None,
+        'session_notes': session_doc.counsellor_session_notes,
+        'mood_assessment': session_doc.counsellor_mood_assessment,
+        'risk_level': session_doc.counsellor_risk_level,
+        'recommendations': session_doc.counsellor_recommendations,
+        'follow_up_required': session_doc.counsellor_follow_up_required,
+        'completed_at': session_doc.counsellor_completed_at.isoformat() if session_doc.counsellor_completed_at else None,
     }
 
 

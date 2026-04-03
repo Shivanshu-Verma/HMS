@@ -203,7 +203,9 @@ export default function AdminDashboard() {
                   {expiringMedicines.slice(0, 3).map((med) => (
                     <li key={med.id}>
                       {med.name} - Expires{" "}
-                      {new Date(med.expiry_date).toLocaleDateString('en-IN')}
+                      {med.expiry_date
+                        ? new Date(med.expiry_date).toLocaleDateString('en-IN')
+                        : "-"}
                     </li>
                   ))}
                 </ul>

@@ -2,6 +2,7 @@
 import datetime
 
 from django.conf import settings
+from bson import ObjectId
 from mongoengine import (
     Document,
     EmbeddedDocument,
@@ -28,6 +29,7 @@ class ActiveVitalSigns(EmbeddedDocument):
 class ActivePrescriptionDraft(EmbeddedDocument):
     """Dormant doctor prescription draft schema retained for import compatibility."""
 
+    draft_item_id = ObjectIdField(default=ObjectId)
     medicine_id = ObjectIdField(required=True)
     dosage = StringField(required=True)
     frequency = StringField(required=True)
@@ -84,6 +86,12 @@ class ActiveSession(Document):
     counsellor_risk_level = StringField(choices=('low', 'medium', 'high'))
     counsellor_recommendations = StringField()
     counsellor_follow_up_required = BooleanField()
+
+    assigned_doctor_id = ObjectIdField()
+    doctor_started_at = DateTimeField()
+    doctor_completed_at = DateTimeField()
+    pharmacy_started_at = DateTimeField()
+    doctor_stage = EmbeddedDocumentField(ActiveDoctorStage)
 
     dispense_items = ListField(EmbeddedDocumentField(DispenseItem), default=list)
     outstanding_debt_at_checkin = FloatField(default=0.0, min_value=0.0)

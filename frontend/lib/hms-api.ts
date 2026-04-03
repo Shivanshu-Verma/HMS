@@ -42,6 +42,11 @@ export interface PatientLookupResponse {
   [key: string]: unknown;
 }
 
+export interface PatientLookupListResponse {
+  items: PatientLookupResponse[];
+  total: number;
+}
+
 export interface FingerprintTemplateResponse {
   patient_id: string;
   fingerprint_template: string;
@@ -110,17 +115,20 @@ export interface CounsellorSessionDetailResponse {
 }
 
 export interface CounsellorReportsResponse {
-  daily?: {
-    total_followups?: number;
-    total_checkins?: number;
+  daily: {
+    date: string;
+    total_followups: number;
   };
-  monthly?: {
-    total?: number;
-    total_checkins?: number;
+  monthly: {
+    year: number;
+    month: number;
+    breakdown: Array<{ day: number; count: number }>;
+    total: number;
   };
-  yearly?: {
-    total?: number;
-    total_checkins?: number;
+  yearly: {
+    year: number;
+    breakdown: Array<{ month: number; count: number }>;
+    total: number;
   };
 }
 
@@ -138,6 +146,11 @@ export interface CounsellorReportSessionItem {
   risk_level?: "low" | "medium" | "high";
   recommendations?: string;
   follow_up_required?: boolean;
+}
+
+export interface CounsellorReportSessionsResponse {
+  items: CounsellorReportSessionItem[];
+  total: number;
 }
 
 export interface PharmacyQueueItem {
@@ -269,15 +282,16 @@ export async function registerPatientTier1(
 }
 
 export async function lookupPatient(
-  queryOrToken: { registration_number?: string } | string,
-  maybeQuery?: { registration_number?: string },
-): Promise<PatientLookupResponse> {
+  queryOrToken: { q?: string; registration_number?: string } | string,
+  maybeQuery?: { q?: string; registration_number?: string },
+): Promise<PatientLookupListResponse> {
   const query =
     typeof queryOrToken === "string" ? (maybeQuery ?? {}) : queryOrToken;
   const params = new URLSearchParams();
+  if (query.q) params.set("q", query.q);
   if (query.registration_number)
     params.set("registration_number", query.registration_number);
-  return apiRequest<PatientLookupResponse>(
+  return apiRequest<PatientLookupListResponse>(
     `/api/v1/patients/lookup/?${params.toString()}`,
     {},
   );
@@ -387,6 +401,13 @@ export async function updatePatientStatus(
 export async function getCounsellorReports(_token?: string) {
   return apiRequest<CounsellorReportsResponse>(
     "/api/v1/counsellor/reports/",
+    {},
+  );
+}
+
+export async function getCounsellorReportSessions(_token?: string) {
+  return apiRequest<CounsellorReportSessionsResponse>(
+    "/api/v1/counsellor/reports/sessions/",
     {},
   );
 }
