@@ -31,7 +31,6 @@ from utils.exceptions import HMSError, NotFoundError
 from utils.fingerprint import (
     decrypt_fingerprint_template,
     encrypt_fingerprint_template,
-    hash_fingerprint_template,
 )
 from utils.hospital_scope import get_patient_for_hospital, get_request_hospital_id
 from utils.response import success_response
@@ -61,28 +60,6 @@ def _recalculate_general_data_complete(patient: Patient) -> bool:
         if not _is_filled(payload.get(field)):
             return False
     return True
-
-
-def _mark_fingerprint_reenrollment_if_needed(patient: Patient) -> None:
-    """
-    Mark legacy biometric records as requiring re-enrollment.
-
-    Args:
-        patient (Patient): Patient document to normalize.
-    """
-    biometric = patient.biometric
-    if not biometric:
-        return
-
-    has_encrypted_template = bool(getattr(biometric, 'fingerprint_template_encrypted', None))
-    has_legacy_hash = bool(getattr(biometric, 'legacy_fingerprint_hash_sha256', None))
-
-    if has_encrypted_template or not has_legacy_hash or biometric.fingerprint_reenrollment_required:
-        return
-
-    biometric.fingerprint_reenrollment_required = True
-    patient.updated_at = datetime.datetime.utcnow()
-    patient.save()
 
 
 def _normalize_digits(value: str) -> str:
@@ -145,7 +122,6 @@ class RegisterPatientView(APIView):
             aadhaar_number_last4=aadhaar_last4,
             biometric=Biometric(
                 fingerprint_template_encrypted=encrypt_fingerprint_template(data['fingerprint_template']),
-                fingerprint_template_sha256=hash_fingerprint_template(data['fingerprint_template']),
                 fingerprint_template_key_version='fernet-v1',
                 fingerprint_enrolled_at=now,
                 fingerprint_reenrollment_required=False,
@@ -238,7 +214,6 @@ class GetPatientView(APIView):
 
     def get(self, request, patient_id):
         patient = get_patient_for_hospital(patient_id, get_request_hospital_id(request))
-        _mark_fingerprint_reenrollment_if_needed(patient)
         return success_response(serialize_patient(patient))
 
 
@@ -263,8 +238,6 @@ class PatientLookupView(APIView):
             patients = patients.filter(__raw__=_build_lookup_query(search_text))
 
         items = list(patients.order_by('full_name').limit(20))
-        for patient in items:
-            _mark_fingerprint_reenrollment_if_needed(patient)
 
         if not items:
             raise NotFoundError(message='Patient not found.', code='PATIENT_NOT_FOUND')
@@ -298,8 +271,6 @@ class FingerprintTemplateView(APIView):
             HMSError: If the patient must re-enroll or has no decryptable template.
         """
         patient = get_patient_for_hospital(patient_id, get_request_hospital_id(request))
-
-        _mark_fingerprint_reenrollment_if_needed(patient)
         biometric = patient.biometric
 
         if not biometric or biometric.fingerprint_reenrollment_required:

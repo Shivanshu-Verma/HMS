@@ -18,7 +18,7 @@ from apps.patients.models import (
     Staff,
 )
 from apps.sessions.models import ActiveSession
-from utils.fingerprint import encrypt_fingerprint_template, hash_fingerprint_template
+from utils.fingerprint import encrypt_fingerprint_template
 
 
 HOSPITAL_ID = ObjectId(settings.DEFAULT_HOSPITAL_ID)
@@ -155,7 +155,8 @@ class Command(BaseCommand):
         for index, row in enumerate(PATIENTS, start=1):
             existing = Patient.objects(
                 hospital_id=HOSPITAL_ID,
-                biometric__fingerprint_template_sha256=hash_fingerprint_template(row['fingerprint_template']),
+                full_name=row['full_name'],
+                phone=row['phone'],
             ).first()
             if existing:
                 continue
@@ -171,7 +172,6 @@ class Command(BaseCommand):
                 gender=row['sex'],
                 biometric=Biometric(
                     fingerprint_template_encrypted=encrypt_fingerprint_template(row['fingerprint_template']),
-                    fingerprint_template_sha256=hash_fingerprint_template(row['fingerprint_template']),
                     fingerprint_template_key_version=settings.FINGERPRINT_TEMPLATE_KEY_VERSION,
                     fingerprint_enrolled_at=now,
                     fingerprint_reenrollment_required=False,
@@ -216,7 +216,8 @@ class Command(BaseCommand):
         # Find the first active, complete patient with no outstanding debt
         patient = Patient.objects(
             hospital_id=HOSPITAL_ID,
-            biometric__fingerprint_template_sha256=hash_fingerprint_template('seed-fp-active-complete'),
+            full_name='Ramesh Patel',
+            phone='9988776655',
         ).first()
 
         if not patient:

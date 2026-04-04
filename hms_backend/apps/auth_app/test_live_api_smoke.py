@@ -21,7 +21,6 @@ from rest_framework.test import APIClient
 from apps.patients.models import AuthRefreshToken, Patient, Staff
 from apps.patients.serializers import GENERAL_FIELDS
 from apps.sessions.models import ActiveSession, AuthBlacklist
-from utils.fingerprint import hash_fingerprint_template
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -163,10 +162,7 @@ class LiveBackendAPISmokeTests(unittest.TestCase):
         patient = Patient.objects.get(id=patient_id, hospital_id=self.hospital_id)
         self.assertEqual(patient.full_name, registration_payload["full_name"])
         self.assertEqual(patient.phone, registration_payload["phone_number"])
-        self.assertEqual(
-            patient.biometric.fingerprint_template_sha256,
-            hash_fingerprint_template(registration_payload["fingerprint_template"]),
-        )
+        self.assertTrue(getattr(patient.biometric, "fingerprint_template_encrypted", None))
         self.assertFalse(patient.general_data_complete)
 
         lookup_response = self.client.get(

@@ -55,15 +55,12 @@ class MedicalBackground(EmbeddedDocument):
 
 
 class Biometric(EmbeddedDocument):
-    """Biometric fingerprint metadata — stores only the SHA-256 hash, never raw data."""
+    """Biometric fingerprint metadata — stores only encrypted template data, never raw data."""
 
     fingerprint_template_encrypted = StringField()
-    fingerprint_template_sha256 = StringField()
     fingerprint_template_key_version = StringField(default='fernet-v1')
     fingerprint_enrolled_at = DateTimeField(required=True)
     fingerprint_reenrollment_required = BooleanField(default=False)
-    legacy_fingerprint_hash_sha256 = StringField(db_field='fingerprint_hash_sha256')
-    legacy_fingerprint_hash_version = StringField(db_field='fingerprint_hash_version')
 
 
 class StatusUpdate(EmbeddedDocument):
@@ -284,13 +281,6 @@ class Patient(Document):
         'indexes': [
             {'fields': ['hospital_id', 'patient_uid'], 'unique': True},
             {'fields': ['hospital_id', 'registration_number'], 'unique': True},
-            {
-                'fields': ['hospital_id', 'biometric.fingerprint_template_sha256'],
-                'unique': True,
-                'partialFilterExpression': {
-                    'biometric.fingerprint_template_sha256': {'$type': 'string'},
-                },
-            },
             {'fields': ['hospital_id', 'phone']},
             {'fields': ['hospital_id', 'status', '-updated_at']},
             {'fields': ['status']},
