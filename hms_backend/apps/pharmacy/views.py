@@ -312,7 +312,7 @@ class PharmacyDebtPaymentView(APIView):
                 'online_amount': online_amount,
                 'new_debt': 0.0,
                 'debt_cleared': debt_cleared,
-                'total_charged': debt_before,
+                'total_charged': debt_cleared,
             },
             debt_snapshot={'debt_before': debt_before, 'debt_after': debt_after},
             created_at=datetime.datetime.utcnow(),
@@ -526,10 +526,13 @@ class PharmacyInvoicesView(APIView):
         invoices = []
         for visit in items:
             payment = getattr(visit, 'payment', None)
-            payment_method = getattr(payment, 'method', None) or 'cash'
-            cash_amount = float(getattr(payment, 'cash_amount', 0.0) or 0.0)
-            online_amount = float(getattr(payment, 'online_amount', 0.0) or 0.0)
-            total_charged = float(getattr(payment, 'total_charged', 0.0) or 0.0)
+            if isinstance(payment, dict):
+                payment_method = payment.get('method') or 'cash'
+            else:
+                payment_method = getattr(payment, 'method', None) or 'cash'
+            cash_amount = _payment_value(payment, 'cash_amount')
+            online_amount = _payment_value(payment, 'online_amount')
+            total_charged = _payment_value(payment, 'total_charged')
 
             patient = patient_map.get(visit.patient_id)
             patient_name = patient.full_name if patient else 'Unknown'

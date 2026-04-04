@@ -524,8 +524,41 @@ export async function checkoutPharmacySession(
   );
 }
 
+export interface PharmacyReportsResponse {
+  daily: {
+    date: string;
+    total_transactions: number;
+    total_revenue: number;
+    cash_collected: number;
+    online_collected: number;
+    debt_added: number;
+    debt_cleared: number;
+  };
+  monthly: {
+    year: number;
+    month: number;
+    breakdown: Array<{
+      day: number;
+      total_transactions: number;
+      total_revenue: number;
+    }>;
+    total_transactions: number;
+    total_revenue: number;
+  };
+  yearly: {
+    year: number;
+    breakdown: Array<{
+      month: number;
+      total_transactions: number;
+      total_revenue: number;
+    }>;
+    total_transactions: number;
+    total_revenue: number;
+  };
+}
+
 export async function getPharmacyReports(_token?: string) {
-  return apiRequest("/api/v1/pharmacy/reports/", {});
+  return apiRequest<PharmacyReportsResponse>("/api/v1/pharmacy/reports/", {});
 }
 
 export async function getPharmacyInvoices(
