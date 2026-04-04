@@ -20,6 +20,8 @@ export interface SessionResponse {
   user: AuthUser;
 }
 
+let sessionRequestPromise: Promise<SessionResponse> | null = null;
+
 export interface PatientLookupResponse {
   patient_id: string;
   registration_number: string;
@@ -257,9 +259,18 @@ export async function login(
 }
 
 export async function getSession(): Promise<SessionResponse> {
-  return apiRequest<SessionResponse>("/api/v1/auth/session/", {
+  if (sessionRequestPromise) {
+    return sessionRequestPromise;
+  }
+
+  sessionRequestPromise = apiRequest<SessionResponse>("/api/v1/auth/session/", {
+    retryOn401: false,
     suppressAuthRedirect: true,
+  }).finally(() => {
+    sessionRequestPromise = null;
   });
+
+  return sessionRequestPromise;
 }
 
 export async function logout(): Promise<{ logged_out: boolean }> {

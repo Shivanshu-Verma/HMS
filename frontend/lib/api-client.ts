@@ -1,6 +1,6 @@
 export type ApiMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
 const CSRF_COOKIE_NAME = "csrftoken";
 const AUTH_RETRY_EXCLUDED_PATHS = new Set([
   "/api/v1/auth/login/",
@@ -9,6 +9,7 @@ const AUTH_RETRY_EXCLUDED_PATHS = new Set([
 ]);
 
 let authFailureHandler: (() => void) | null = null;
+let refreshSessionPromise: Promise<boolean> | null = null;
 
 export interface ApiRequestOptions {
   method?: ApiMethod;
@@ -23,6 +24,14 @@ interface ApiEnvelope<T> {
   error?: {
     message?: string;
   };
+}
+
+function buildApiUrl(path: string): string {
+  if (!API_BASE_URL) {
+    return path;
+  }
+
+  return path.startsWith("/") ? `${API_BASE_URL}${path}` : `${API_BASE_URL}/${path}`;
 }
 
 function getCsrfToken(): string | null {
@@ -59,9 +68,11 @@ async function sendRequest<T>(
   options: ApiRequestOptions,
 ): Promise<{ response: Response; payload: ApiEnvelope<T> }> {
   const method = options.method || "GET";
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
+
+  if (options.body) {
+    headers["Content-Type"] = "application/json";
+  }
 
   if (shouldAttachCsrf(method)) {
     const csrfToken = getCsrfToken();
@@ -70,7 +81,7 @@ async function sendRequest<T>(
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(buildApiUrl(path), {
     method,
     headers,
     cache: "no-store",
@@ -89,23 +100,29 @@ export function registerAuthFailureHandler(handler: (() => void) | null): void {
 }
 
 async function tryRefreshSession(): Promise<boolean> {
+  if (refreshSessionPromise) {
+    return refreshSessionPromise;
+  }
+
   const csrfToken = getCsrfToken();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
 
   if (csrfToken) {
     headers["X-CSRFToken"] = csrfToken;
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh/`, {
+  refreshSessionPromise = fetch(buildApiUrl("/api/v1/auth/refresh/"), {
     method: "POST",
     headers,
     credentials: "include",
     cache: "no-store",
-  });
+  })
+    .then((response) => response.ok)
+    .finally(() => {
+      refreshSessionPromise = null;
+    });
 
-  return response.ok;
+  return refreshSessionPromise;
 }
 
 export async function apiRequest<T>(

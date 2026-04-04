@@ -90,10 +90,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    void bootstrapSession();
+    const bootstrapTimer = window.setTimeout(() => {
+      void bootstrapSession();
+    }, 0);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(bootstrapTimer);
     };
   }, [isMounted]);
 
